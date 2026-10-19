@@ -1,0 +1,15 @@
+[
+  {
+    "model": "clef-flash",
+    "answers": {
+      "has_truck": {"type": "noul", "noul": 0.912},
+      "door": {
+        "type": "choice",
+        "choice": "open",
+        "probabilities": {"open": 0.81, "partial": 0.15, "closed": 0.04},
+        "confidence": 0.715
+      }
+    },
+    "usage": {"input_tokens": 655, "output_tokens": 0}
+  }
+]

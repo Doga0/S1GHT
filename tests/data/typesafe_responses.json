@@ -1,0 +1,29 @@
+[
+  {
+    "model": "jev-1.13.0",
+    "answers": {
+      "is_hazard": {"type": "noul", "noul": 0.97},
+      "area": {
+        "type": "choice",
+        "choice": "warehouse",
+        "probabilities": {"warehouse": 0.9, "office": 0.02, "parking": 0.08},
+        "confidence": 0.85
+      },
+      "severity": {
+        "type": "score",
+        "score": 1.4,
+        "legend": {"0": "Minor", "1": "Moderate", "2": "Severe"},
+        "probabilities": {"0": 0.05, "1": 0.5, "2": 0.45},
+        "confidence": 0.4
+      }
+    },
+    "usage": {"input_tokens": 412, "output_tokens": 31}
+  },
+  {
+    "model": "jev-1.14.0",
+    "answers": {
+      "vehicle": {"type": "box", "box": {"top": 0.31, "bottom": 0.9, "left": 0.12, "right": 0.58}, "confidence": 0.77}
+    },
+    "usage": {"input_tokens": 305, "output_tokens": 22}
+  }
+]

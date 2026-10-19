@@ -1,0 +1,54 @@
+[
+  {
+    "state": "The forklift has been parked across the fire exit since this morning.",
+    "model": "jev-latest",
+    "questions": {
+      "is_hazard": {
+        "type": "noul",
+        "instructions": "Does this describe a safety hazard?",
+        "criteria": {"true": "Something could hurt people", "false": "Nothing unsafe is described"}
+      },
+      "area": {
+        "type": "choice",
+        "instructions": "Which area is involved?",
+        "criteria": {"warehouse": "Storage and loading", "office": null, "parking": "Outdoor vehicle areas"}
+      },
+      "severity": {
+        "type": "score",
+        "instructions": "How severe is it?",
+        "criteria": ["Minor", "Moderate", "Severe"]
+      }
+    }
+  },
+  {
+    "state": {"report": {"site": "B2", "text": "Gate left open overnight."}},
+    "model": "jev-1.13.0",
+    "questions": {
+      "open_gate": {
+        "type": "noul",
+        "instructions": {"site_rules": ["Gates closed after 20:00"], "question": "Does `report` break `site_rules`?"}
+      }
+    }
+  },
+  {
+    "model": "jev-latest",
+    "state": {"frame": "c41e9a20-frame"},
+    "assets": {
+      "c41e9a20-frame": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGOUkzvBwMDAxAAGAAuwAQhFr5DSAAAAAElFTkSuQmCC"},
+      "5b07d2f3-ref": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGOUkzvBwMDAxAAGAAuwAQhFr5DSAAAAAElFTkSuQmCC"},
+      "e8820b6c-helmet": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGOUkzvBwMDAxAAGAAuwAQhFr5DSAAAAAElFTkSuQmCC"}
+    },
+    "questions": {
+      "same_vehicle": {
+        "type": "noul",
+        "instructions": "Is the vehicle in `frame` the one in this picture: 5b07d2f3-ref?"
+      },
+      "headgear": {
+        "type": "choice",
+        "instructions": "What is the worker in `frame` wearing on their head?",
+        "criteria": {"hard_hat": {"description": "A hard hat like this", "examples": ["e8820b6c-helmet"]}, "cap": "A soft cap", "none": null}
+      },
+      "vehicle": {"type": "box", "instructions": "the vehicle in `frame`"}
+    }
+  }
+]
