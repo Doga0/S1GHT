@@ -7,7 +7,7 @@ name = "s1ght"
 version = "0.1.0.dev0"
 description = "S1GHT — Real-Time Visual Decisions"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
@@ -35,5 +35,5 @@ addopts = "-m 'not gpu and not network and not slow'"
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 src = ["src", "tests"]
