@@ -1,0 +1,15 @@
+[
+  {
+    "model": "clef-flash",
+    "state": "A camera at the loading dock captured this frame.",
+    "images": ["iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGOUkzvBwMDAxAAGAAuwAQhFr5DSAAAAAElFTkSuQmCC"],
+    "questions": {
+      "has_truck": {"type": "noul", "instructions": "Is a truck visible?"},
+      "door": {
+        "type": "choice",
+        "instructions": "What state is the dock door in?",
+        "criteria": {"open": "Fully open", "closed": "Fully closed", "partial": "Partly open"}
+      }
+    }
+  }
+]
