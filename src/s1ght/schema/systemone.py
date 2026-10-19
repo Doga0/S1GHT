@@ -72,6 +72,26 @@ class SystemOneRequest:
             found.setdefault(img.ref, img)
         return found
 
+    def map_images(self, fn: Callable[[Image], Image]) -> SystemOneRequest:
+        """Copy of the request with every image replaced by `fn(image)`.
+
+        `fn` is called once per image; keep the `ref` if the image may be referenced inside a
+        longer string (`extra_assets`).
+        """
+        done: dict[str, Image] = {}
+
+        def sub(img: Image) -> Image:
+            if img.ref not in done:
+                done[img.ref] = fn(img)
+            return done[img.ref]
+
+        return SystemOneRequest(
+            model=self.model,
+            state=_walk(self.state, sub),
+            questions={qid: question_from_wire(_walk(q.to_wire(), sub)) for qid, q in self.questions.items()},
+            extra_assets=[sub(img) for img in self.extra_assets],
+        )
+
     @property
     def needs_images_flag(self) -> bool:
         """True when TypeSafe needs the `TypeSafe-Danger-Zone-Images: true` header."""
