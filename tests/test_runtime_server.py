@@ -234,44 +234,58 @@ def test_unknown_provider() -> None:
         SystemOneClient("vllm", "m")  # type: ignore[arg-type]
 
 
-# --- live Ollama (network) -------------------------------------------------------------------
+# --- live servers (network) ------------------------------------------------------------------
+
+LIVE = {
+    # provider: (env var for the model, default model, minimum server version for image decisions)
+    "ollama": ("S1GHT_OLLAMA_MODEL", "hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0", (0, 35, 1)),
+    "ollaya": ("S1GHT_OLLAYA_MODEL", "d1:3b-vision", (0, 7, 5)),
+}
+
+
+def drawing(shape: str, color: tuple[int, int, int]) -> Image:
+    canvas = PILImage.new("RGB", (448, 448), "white")
+    draw = ImageDraw.Draw(canvas)
+    (draw.ellipse if shape == "circle" else draw.rectangle)((112, 112, 336, 336), fill=color)
+    return Image(canvas, format="jpeg")
 
 
 @pytest.mark.network
-def test_ollama_clef_flash_live() -> None:
-    """Single-image noul + choice against a local Ollama.
+@pytest.mark.parametrize("provider", sorted(LIVE))
+def test_live_single_image(provider: str) -> None:
+    """Single-image noul + choice against a local server; a red circle and a blue square must be told apart.
 
-    Default model: LiquidAI d1-omni-600M (~640 MB): `ollama pull hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0`.
-    Override with S1GHT_OLLAMA_MODEL, e.g. `clef-flash`.
+    Models: Ollama `ollama pull hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0` (~640 MB);
+    Ollaya `ollaya pull d1:3b-vision` (3.5 GB). Override with S1GHT_OLLAMA_MODEL / S1GHT_OLLAYA_MODEL.
     """
-    model = os.environ.get("S1GHT_OLLAMA_MODEL", "hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0")
-    c = SystemOneClient("ollama", model, timeout=300)
+    env, default, min_version = LIVE[provider]
+    model = os.environ.get(env, default)
+    c = SystemOneClient(provider, model, timeout=600)
     try:
         version = httpx.get(f"{c.base_url}/api/version", timeout=2).json()["version"]
     except httpx.HTTPError:
-        pytest.skip(f"no Ollama server at {c.base_url}")
-    if tuple(int(x) for x in version.split("-")[0].split(".")[:3]) < (0, 35, 1):
-        pytest.skip(f"Ollama {version} is too old; image decisions need 0.35.1+")
+        pytest.skip(f"no {provider} server at {c.base_url}")
+    if tuple(int(x) for x in version.split("-")[0].split(".")[:3]) < min_version:
+        pytest.skip(f"{provider} {version} is too old for image decisions")
 
-    canvas = PILImage.new("RGB", (448, 448), "white")
-    ImageDraw.Draw(canvas).ellipse((112, 112, 336, 336), fill=(220, 20, 20))
-    req = SystemOneRequest(
-        model,
-        "A picture drawn for a test.",
-        {
-            "has_circle": Noul("Does the image show a red circle?"),
-            "color": Choice("What color is the main shape?", {"red": None, "green": None, "blue": None}),
-        },
-        [Image(canvas, format="png")],
-    )
+    questions = {
+        "has_circle": Noul("Does the image show a red circle?"),
+        "color": Choice("What color is the main shape?", {"red": None, "green": None, "blue": None}),
+    }
     try:
-        resp = c.decide(req)
+        red = c.decide(
+            SystemOneRequest(model, "A picture drawn for a test.", questions, [drawing("circle", (220, 20, 20))])
+        )
+        blue = c.decide(
+            SystemOneRequest(model, "A picture drawn for a test.", questions, [drawing("square", (20, 40, 220))])
+        )
     except SystemOneError as e:
         if e.status == 404:
-            pytest.skip(f"model {model} not pulled: {e}")
+            pytest.skip(f"model {model} not pulled on {provider}: {e}")
         raise
     finally:
         c.close()
 
-    assert resp.answers["has_circle"].noul > 0.5
-    assert resp.answers["color"].choice == "red"
+    assert red.answers["has_circle"].noul > 0.5 > blue.answers["has_circle"].noul
+    assert red.answers["color"].choice == "red"
+    assert blue.answers["color"].choice == "blue"
