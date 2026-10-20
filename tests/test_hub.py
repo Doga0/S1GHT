@@ -204,7 +204,7 @@ def test_load_runtime_server(no_network) -> None:
 
 
 def test_load_runtime_not_yet(no_network) -> None:
-    with pytest.raises(NotImplementedError, match="step 6"):
-        load_runtime("d1-3b")
+    with pytest.raises(NotImplementedError, match="qwen_vl.*step 11"):
+        load_runtime("qwen3-vl-4b")
     with pytest.raises(NotImplementedError, match="step 11"):
         load_runtime("vllm://localhost:8000/m")

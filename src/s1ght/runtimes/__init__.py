@@ -27,5 +27,9 @@ def load_runtime(spec: str | RuntimeSpec, *, runtime: str | None = None, **kwarg
         if spec.base_url is not None:
             kwargs.setdefault("base_url", spec.base_url)
         return SystemOneClient(spec.runtime, spec.model, **kwargs)  # type: ignore[arg-type]
-    pending = {"native": "P1 step 6", "vllm": "P1 step 11", "llama_cpp": "a later step"}
+    if spec.runtime == "native":
+        from s1ght.runtimes.native.engine import NativeRuntime
+
+        return NativeRuntime(spec, **kwargs)
+    pending = {"vllm": "P1 step 11", "llama_cpp": "a later step"}
     raise NotImplementedError(f"the {spec.runtime!r} runtime is not implemented yet ({pending.get(spec.runtime, '?')})")
