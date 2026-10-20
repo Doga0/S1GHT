@@ -1,0 +1,52 @@
+# S1GHT model catalog.
+#
+# Weights stay with their authors; every source is pinned to a Hugging Face commit, which
+# fixes the content of every file in it. The first key under `runtimes` is the default.
+#
+#   source       hf://org/repo@<commit>
+#   family       native adapter that knows the prompt, preprocessing and readout
+#   runtimes     native: {dtype: {cuda, t4, cpu}}      in-process engine (transformers)
+#                ollama / ollaya: <tag>                 /v1/systemone servers (tag tested live)
+#                vllm: {model: <served model id>}       OpenAI-compatible logprob server
+#                llama_cpp: {gguf, mmproj}              CPU path (GGUF + vision projector)
+#   calibration  profile JSON fitted on held-out data (step 9); null = uncalibrated
+#   license      SPDX id or the author's license name
+
+d1-3b:
+  source: hf://LiquidAI/d1-3B@051bcc464b01b9f92942b364d9586b0ef5912432
+  family: lfm2_vl
+  modalities: [text, image]
+  runtimes:
+    native: {dtype: {cuda: bf16, t4: fp16, cpu: fp32}}
+    ollaya: d1:3b-vision
+    llama_cpp:
+      gguf: hf://LiquidAI/d1-3B-GGUF@bb1e436ea78eb96a3f1acb6da865f70c2fbeb563/d1-3B-Q8_0.gguf
+      mmproj: hf://LiquidAI/d1-3B-GGUF@bb1e436ea78eb96a3f1acb6da865f70c2fbeb563/mmproj-d1-3B-Q8_0.gguf
+  calibration: null
+  license: lfm1.0
+  notes: LFM Open License 1.0 does not cover commercial use by organizations with US$10M+ annual revenue.
+
+d1-omni-600m:
+  source: hf://LiquidAI/d1-omni-600M@02b55d7076f15129e59ab3f94783f32c4b088674
+  family: d1_omni
+  modalities: [text, image, audio]
+  runtimes:
+    native: {dtype: {cuda: fp16, t4: fp16, cpu: fp32}}   # the model card advises against bf16
+    ollama: hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0
+    llama_cpp:
+      gguf: hf://LiquidAI/d1-omni-600M-GGUF@8eb2d2a1c5404bba8a34a88bd8e159c242197d51/d1-omni-600M-Q8_0.gguf
+      mmproj: hf://LiquidAI/d1-omni-600M-GGUF@8eb2d2a1c5404bba8a34a88bd8e159c242197d51/mmproj-d1-omni-600M-Q8_0.gguf
+  calibration: null
+  license: lfm1.0
+  notes: Early research release. LFM Open License 1.0 does not cover commercial use by organizations with US$10M+ annual revenue.
+
+qwen3-vl-4b:
+  source: hf://Qwen/Qwen3-VL-4B-Instruct@ebb281ec70b05090aa6165b016eac8ec08e71b17
+  family: qwen_vl
+  modalities: [text, image]
+  runtimes:
+    native: {dtype: {cuda: bf16, t4: fp16, cpu: fp32}}
+    vllm: {model: Qwen/Qwen3-VL-4B-Instruct}
+  calibration: null
+  license: apache-2.0
+  notes: General VLM read with option-letter logits (SemIf contract); thinking must be off.
