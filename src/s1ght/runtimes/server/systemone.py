@@ -80,13 +80,14 @@ class SystemOneError(RuntimeError):
     """A provider rejected a request or failed to answer it.
 
     Attributes:
-        status: HTTP status code.
+        status: HTTP status code, or 0 when no response arrived (codes TIMEOUT, UNREACHABLE).
         code: Provider error code when given (Ollaya: `MODEL_NOT_FOUND`, ...), else None.
         body: Decoded JSON error body, or the raw text.
     """
 
     def __init__(self, status: int, message: str, code: str | None = None, body: Any = None) -> None:
-        super().__init__(f"HTTP {status}{f' {code}' if code else ''}: {message}")
+        head = f"HTTP {status}{f' {code}' if code else ''}" if status else (code or "error")
+        super().__init__(f"{head}: {message}")
         self.status, self.code, self.body = status, code, body
 
 
@@ -178,7 +179,15 @@ class SystemOneClient(RuntimeBase):
             kwargs = {"json": body}
 
         for attempt in range(self.max_retries + 1):
-            resp = self._http.post(self.spec.path, headers=headers, **kwargs)
+            try:
+                resp = self._http.post(self.spec.path, headers=headers, **kwargs)
+            except httpx.TimeoutException as e:
+                timeout = self._http.timeout.read
+                raise SystemOneError(
+                    0, f"no answer from {self.base_url} within {timeout}s; pass a larger timeout=", "TIMEOUT"
+                ) from e
+            except httpx.TransportError as e:
+                raise SystemOneError(0, f"cannot reach {self.base_url}: {e}", "UNREACHABLE") from e
             if resp.status_code < 400:
                 return resp
             if resp.status_code not in RETRY_STATUS or attempt == self.max_retries:

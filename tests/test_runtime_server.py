@@ -229,6 +229,23 @@ def test_raw_scores_recover_provider_probabilities() -> None:
     assert np.all(np.isfinite(raw.scores["sky"]))
 
 
+@pytest.mark.parametrize(
+    ("exc", "code"),
+    [(httpx.ReadTimeout("slow"), "TIMEOUT"), (httpx.ConnectError("refused"), "UNREACHABLE")],
+)
+def test_transport_errors_become_systemone_errors(exc, code) -> None:
+    def handler(request):
+        raise exc
+
+    c = SystemOneClient("ollama", "m", transport=httpx.MockTransport(handler), timeout=7)
+    with pytest.raises(SystemOneError) as e:
+        c.decide(SystemOneRequest("m", "x", {"rain": QUESTIONS["rain"]}))
+    assert (e.value.status, e.value.code) == (0, code)
+    assert str(e.value).startswith(code)
+    if code == "TIMEOUT":
+        assert "within 7" in str(e.value) and "timeout=" in str(e.value)
+
+
 def test_unknown_provider() -> None:
     with pytest.raises(ValueError, match="unknown provider"):
         SystemOneClient("vllm", "m")  # type: ignore[arg-type]
