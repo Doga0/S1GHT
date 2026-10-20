@@ -97,13 +97,17 @@ class SystemOneRequest:
         """True when TypeSafe needs the `TypeSafe-Danger-Zone-Images: true` header."""
         return bool(self.assets()) or any(isinstance(q, Box) for q in self.questions.values())
 
-    def to_wire(self, dialect: Dialect = "typesafe", *, inline: bool = False) -> tuple[dict, dict[str, bytes]]:
+    def to_wire(
+        self, dialect: Dialect = "typesafe", *, inline: bool = False, embed_images: bool = True
+    ) -> tuple[dict, dict[str, bytes]]:
         """Encode for the wire.
 
         Args:
             dialect: "typesafe" or "ollama".
             inline: TypeSafe only. True puts images in the JSON as `data_base64`; False
                 (default) returns them as multipart parts named by their reference.
+            embed_images: Ollama only. False writes the "[image N]" labels but leaves out the
+                base64 `images` list, for in-process runtimes that take `assets()` directly.
 
         Returns:
             (JSON body, multipart parts). Parts are empty for inline and Ollama requests.
@@ -153,7 +157,7 @@ class SystemOneRequest:
                 "state": _walk(self.state, label, on_str),
                 "questions": {qid: _walk(q.to_wire(), label, on_str) for qid, q in self.questions.items()},
             }
-            if assets:
+            if assets and embed_images:
                 body["images"] = [_b64(img.to_bytes()) for img in assets.values()]
             return body, {}
 

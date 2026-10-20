@@ -149,6 +149,28 @@ def score_to_answer(question: Question, logits: np.ndarray, temperature: float =
     raise TypeError(f"{type(question).__name__} answers are not computed from logits")
 
 
+def answers_to_raw(questions: QuestionSet, answers: dict[str, Answer], eps: float = 1e-9) -> RawScores:
+    """Log-probabilities of already computed answers, in `RawScores` order.
+
+    For back ends that only return probabilities (servers, a model's own readout): softmax of
+    these logs gives the probabilities back, so S1GHT's calibration can be applied on top.
+    Box answers and missing answers are skipped.
+    """
+    scores: dict[str, np.ndarray] = {}
+    for qid, q in questions.items():
+        a = answers.get(qid)
+        if isinstance(q, Noul) and isinstance(a, NoulAnswer):
+            p = np.array([a.noul, 1 - a.noul])
+        elif isinstance(q, Choice) and isinstance(a, ChoiceAnswer):
+            p = np.array([a.probabilities.get(o, 0.0) for o in q.criteria])
+        elif isinstance(q, Score) and isinstance(a, ScoreAnswer):
+            p = np.array([a.probabilities.get(i, 0.0) for i in range(len(q.criteria))])
+        else:
+            continue
+        scores[qid] = np.log(np.clip(p, eps, 1.0))
+    return RawScores(scores)
+
+
 def scores_to_answers(
     questions: QuestionSet, raw: RawScores, temperature: float | dict[str, float] = 1.0
 ) -> dict[str, Answer]:

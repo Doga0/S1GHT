@@ -24,24 +24,14 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import httpx
-import numpy as np
 
-from s1ght.runtimes.base import Capabilities, RawScores, RuntimeBase, validate_request
+from s1ght.runtimes.base import Capabilities, RawScores, RuntimeBase, answers_to_raw, validate_request
 from s1ght.schema.assets import Image
-from s1ght.schema.questions import Choice, Noul, Score
-from s1ght.schema.systemone import (
-    ChoiceAnswer,
-    Dialect,
-    NoulAnswer,
-    ScoreAnswer,
-    SystemOneRequest,
-    SystemOneResponse,
-)
+from s1ght.schema.systemone import Dialect, SystemOneRequest, SystemOneResponse
 
 Provider = Literal["typesafe", "ollama", "ollaya"]
 
 RETRY_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
-_EPS = 1e-9
 
 
 @dataclass(frozen=True)
@@ -208,20 +198,7 @@ class SystemOneClient(RuntimeBase):
 
     def raw(self, req: SystemOneRequest) -> RawScores:
         """Log-probabilities of the provider's answers, in `RawScores` option order (Box questions skipped)."""
-        resp = self.decide(req)
-        scores: dict[str, np.ndarray] = {}
-        for qid, q in req.questions.items():
-            a = resp.answers.get(qid)
-            if isinstance(q, Noul) and isinstance(a, NoulAnswer):
-                p = np.array([a.noul, 1 - a.noul])
-            elif isinstance(q, Choice) and isinstance(a, ChoiceAnswer):
-                p = np.array([a.probabilities.get(o, 0.0) for o in q.criteria])
-            elif isinstance(q, Score) and isinstance(a, ScoreAnswer):
-                p = np.array([a.probabilities.get(i, 0.0) for i in range(len(q.criteria))])
-            else:
-                continue
-            scores[qid] = np.log(np.clip(p, _EPS, 1.0))
-        return RawScores(scores)
+        return answers_to_raw(req.questions, self.decide(req).answers)
 
     def close(self) -> None:
         self._http.close()
