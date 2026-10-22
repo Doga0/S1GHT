@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from s1ght.hub import RuntimeSpec
     from s1ght.runtimes.native.families.base import FamilyAdapter, Item
 
-CAPS = Capabilities(images=True, batch=True, prefix_cache=True, raw_scores=True, max_options=255)
+CAPS = Capabilities(images=True, batch=True, prefix_cache=True, raw_scores=True, max_options=255)  # system_one families
 DEFAULT_DTYPES = {"cuda": "bf16", "t4": "fp16", "cpu": "fp32"}
 
 
@@ -90,6 +90,8 @@ class NativeRuntime(RuntimeBase):
         dtype: "bf16", "fp16" or "fp32"; from the catalog's per-device table when None.
         family: A ready adapter (tests); built from `spec.family` when None.
         path: Local model directory; downloaded from `spec.source` into the S1GHT cache when None.
+        **family_options: For option-letter families (`qwen_vl`, `semif_generic`): `batch`
+            (prompts per forward), `flip` ("auto", "always", "never"), `margin`, `max_side`.
     """
 
     caps = CAPS
@@ -102,6 +104,7 @@ class NativeRuntime(RuntimeBase):
         dtype: str | None = None,
         family: FamilyAdapter | None = None,
         path: str | None = None,
+        **family_options: Any,
     ) -> None:
         if spec.runtime != "native":
             raise ValueError(f"NativeRuntime needs a native spec, got {spec.runtime!r}")
@@ -111,9 +114,12 @@ class NativeRuntime(RuntimeBase):
         if family is None:
             from s1ght.runtimes.native.families import get_family
 
-            family = get_family(spec.family or "semif_generic")
+            family = get_family(spec.family or "semif_generic", **family_options)
             _require_torch()
+        elif family_options:
+            raise ValueError("family options apply when the family is built from the spec")
         self.family = family
+        self.caps = getattr(family, "caps", CAPS)
         self.device = select_device(device)
         self.dtype = dtype or select_dtype(self.device, (spec.options or {}).get("dtype"))
         if path is None:

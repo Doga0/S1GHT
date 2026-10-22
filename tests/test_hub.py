@@ -203,8 +203,20 @@ def test_load_runtime_server(no_network) -> None:
     rt.close()
 
 
-def test_load_runtime_not_yet(no_network) -> None:
-    with pytest.raises(NotImplementedError, match="qwen_vl.*step 11"):
-        load_runtime("qwen3-vl-4b")
-    with pytest.raises(NotImplementedError, match="step 11"):
-        load_runtime("vllm://localhost:8000/m")
+def test_load_runtime_logprob_servers(no_network) -> None:
+    from s1ght.runtimes.server.logprob import LogprobClient
+
+    rt = load_runtime("vllm://localhost:8000/Qwen/Qwen3-VL-4B-Instruct")
+    assert isinstance(rt, LogprobClient) and rt.server == "vllm" and rt.base_url == "http://localhost:8000"
+    assert rt.model == "Qwen/Qwen3-VL-4B-Instruct"
+    rt.close()
+    rt = load_runtime("llama-server://127.0.0.1:8081")
+    assert rt.server == "llama_server" and rt.base_url == "http://127.0.0.1:8081"  # type: ignore[attr-defined]
+    rt.close()
+    rt = load_runtime("qwen3-vl-4b", runtime="llama_server")
+    assert rt.base_url == "http://127.0.0.1:8080" and rt.model == "Qwen3-VL-4B-Instruct"  # type: ignore[attr-defined]
+    rt.close()
+    with pytest.raises(ValueError, match="llama-server://host:port"):
+        resolve("llama-server:///model")
+    with pytest.raises(NotImplementedError, match="llama_cpp"):
+        load_runtime("d1-3b", runtime="llama_cpp")

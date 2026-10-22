@@ -8,6 +8,7 @@
 #   runtimes     native: {dtype: {cuda, t4, cpu}}      in-process engine (transformers)
 #                ollama / ollaya: <tag>                 /v1/systemone servers (tag tested live)
 #                vllm: {model: <served model id>}       OpenAI-compatible logprob server
+#                llama_server: {model: <name>}          llama.cpp's server (logprobs, same client)
 #                llama_cpp: {gguf, mmproj}              CPU path (GGUF + vision projector)
 #   calibration  profile JSON fitted on held-out data (step 9); null = uncalibrated
 #   license      SPDX id or the author's license name
@@ -47,6 +48,7 @@ qwen3-vl-4b:
   runtimes:
     native: {dtype: {cuda: bf16, t4: fp16, cpu: fp32}}
     vllm: {model: Qwen/Qwen3-VL-4B-Instruct}
+    llama_server: {model: Qwen3-VL-4B-Instruct}   # llama-server -hf Qwen/Qwen3-VL-4B-Instruct-GGUF:Q8_0
   calibration: null
   license: apache-2.0
   notes: General VLM read with option-letter logits (SemIf contract); thinking must be off.
