@@ -4,10 +4,12 @@ A family adapter hides everything model-specific (prompt template, image preproc
 answer readout) behind `run`, which takes wire-format questions and returns wire-format
 answers with the tokens read.
 
-P1 families wrap models that ship their own one-pass decision engine (`system_one_batch`):
-d1 reads the state and images once and branches the questions off that shared trunk, so
-prefix reuse is already inside the model. Finer hooks (`encode_prefix` / `score`,
-`hidden_states`, `attention`) come with the families that need them (Qwen, P2 localizers).
+Two kinds of family exist. `SystemOneFamily` wraps models that ship their own one-pass
+decision engine (`system_one_batch`): d1 reads the state and images once and branches the
+questions off that shared trunk. `semif_generic` and `qwen_vl` read general chat VLMs
+through option letters (`s1ght.runtimes.letters`). A family may set `caps` when it differs
+from the native default (letter families allow 26 options and no prefix cache). Hooks for
+`hidden_states` and `attention` come with the P2 localizers.
 """
 
 from __future__ import annotations
@@ -81,11 +83,16 @@ class SystemOneFamily:
 
     def close(self) -> None:
         self.model = None
-        gc.collect()
-        try:
-            import torch
+        release()
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except ImportError:
-            pass
+
+def release() -> None:
+    """Return freed model memory: run the garbage collector and empty the CUDA cache."""
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass

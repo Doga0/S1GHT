@@ -4,7 +4,7 @@
 
 1. A short name from the packaged catalog (`registry.yaml`), e.g. "d1-3b".
 2. A URI: `hf://org/repo[@rev][/file]`, `ollama://<tag>`, `ollaya://<tag>`, `typesafe://<model>`,
-   `vllm://host:port/<model>`.
+   `vllm://host:port/<model>`, `llama-server://host:port[/<model>]`.
 3. A Hugging Face repo id not in the catalog ("org/repo") or a local model directory: the
    family is guessed from `config.json`; unknown architectures fall back to `semif_generic`
    (generic option-letter readout) with an "uncalibrated" warning.
@@ -27,7 +27,7 @@ from typing import Any
 
 import yaml
 
-SERVER_RUNTIMES = ("ollama", "ollaya", "typesafe", "vllm")
+SERVER_RUNTIMES = ("ollama", "ollaya", "typesafe", "vllm", "llama_server")
 RUNTIMES = ("native", "llama_cpp", *SERVER_RUNTIMES)
 FAMILIES = ("lfm2_vl", "d1_omni", "qwen_vl", "semif_generic")
 
@@ -104,7 +104,7 @@ class RuntimeSpec:
     """Everything needed to build a runtime for one model.
 
     Attributes:
-        runtime: "native", "llama_cpp", "ollama", "ollaya", "typesafe" or "vllm".
+        runtime: "native", "llama_cpp", "ollama", "ollaya", "typesafe", "vllm" or "llama_server".
         model: Model name for that runtime: HF repo id (native), server tag or served model id.
         source: Weights to download for native/llama_cpp; None for server runtimes.
         family: Native adapter family, or None when the runtime reads answers itself.
@@ -166,7 +166,14 @@ def parse_uri(uri: str) -> RuntimeSpec:
         if not host or not model:
             raise ValueError(f"expected vllm://host:port/model, got {uri!r}")
         return RuntimeSpec(runtime="vllm", model=model, base_url=f"http://{host}")
-    raise ValueError(f"unknown scheme {scheme!r} in {uri!r}; expected hf, ollama, ollaya, typesafe or vllm")
+    if scheme == "llama-server":
+        host, _, model = rest.partition("/")
+        if not host:
+            raise ValueError(f"expected llama-server://host:port[/model], got {uri!r}")
+        return RuntimeSpec(runtime="llama_server", model=model or "default", base_url=f"http://{host}")
+    raise ValueError(
+        f"unknown scheme {scheme!r} in {uri!r}; expected hf, ollama, ollaya, typesafe, vllm or llama-server"
+    )
 
 
 def family_from_config(config: dict[str, Any]) -> str | None:
@@ -254,7 +261,7 @@ def _from_entry(entry: ModelEntry, runtime: str | None) -> RuntimeSpec:
         return replace(spec, model=entry.source.repo, source=entry.source, family=entry.family, options=opts or {})
     if runtime == "llama_cpp":
         return replace(spec, model=entry.source.repo, source=HFRef.parse(opts["gguf"]), options=opts)
-    if runtime == "vllm":
+    if runtime in ("vllm", "llama_server"):
         return replace(spec, model=opts["model"], family=entry.family, base_url=opts.get("base_url"))
     return spec
 
