@@ -1,0 +1,16 @@
+# Per-track questions for `track`: detector class -> questions about each crop (state key `image`).
+person:
+  no_helmet:
+    type: noul
+    instructions: "Is the person in the center of `image` NOT wearing a hard hat?"
+  bag:
+    type: noul
+    instructions: "Is the person in the center of `image` carrying a bag or backpack?"
+  posture:
+    type: choice
+    instructions: "What is the person in the center of `image` doing?"
+    criteria: {standing: null, walking: null, sitting: null, bending: null}
+car:
+  parked:
+    type: noul
+    instructions: "Is the car in `image` parked?"

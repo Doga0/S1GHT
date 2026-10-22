@@ -1,0 +1,13 @@
+# Full-frame questions for `decide` and `predict`: question id -> TypeSafe question.
+# The frame is the state key `image`.
+bus:
+  type: noul
+  instructions: "Is there a bus in `image`?"
+scene:
+  type: choice
+  instructions: "Where was `image` taken?"
+  criteria: {city street: null, football pitch: null, kitchen: null, beach: null}
+crowd:
+  type: score
+  instructions: "How many people are in `image`?"
+  criteria: ["none", "one or two", "three to ten", "more than ten"]
