@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 native = ["torch>=2.4", "transformers>=5.14", "accelerate"]   # d1-3B transformers>=5.14 istiyor
-ultralytics = ["ultralytics>=8.4"]                            # AGPL-3.0
+ultralytics = ["ultralytics>=8.4", "lap>=0.5.12"]             # AGPL-3.0; lap: ByteTrack (else auto-installed at run time)
 serve = ["fastapi", "uvicorn"]
 dev = ["pytest", "pytest-cov", "ruff", "mypy"]
 all = ["s1ght[native,ultralytics,serve]"]

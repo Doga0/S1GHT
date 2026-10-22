@@ -15,16 +15,18 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterable, Iterator
+from pathlib import Path
 from typing import Any, Self
 
+from s1ght.detectors.base import Detector, Frame
 from s1ght.engine.crops import fit_to_limits
 from s1ght.hub import RuntimeSpec, resolve
 from s1ght.io.sources import SourceFrame, is_live, load_source
-from s1ght.results import Results
+from s1ght.results import Boxes, Results
 from s1ght.runtimes import load_runtime
 from s1ght.runtimes.base import Runtime
 from s1ght.schema.assets import Image
-from s1ght.schema.questions import QuestionSet, questions_from_wire
+from s1ght.schema.questions import QuestionSet, load_questions, questions_from_wire
 from s1ght.schema.systemone import SystemOneRequest, SystemOneResponse
 
 
@@ -162,8 +164,145 @@ class S1GHT:
             for f, r in zip(frames, resps, strict=True)
         ]
 
-    def track(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError("track() arrives in P1 step 8")
+    def track(
+        self,
+        source: Any,
+        *,
+        ask: dict[str, QuestionSet] | dict[str, dict[str, dict[str, Any]]] | str,
+        detector: str | Detector = "yolo11n.pt",
+        stream: bool = False,
+        budget: float = 2.0,
+        batch: int = 4,
+        pad: float = 0.2,
+        context: str = "crop",
+        half_life: float = 1.0,
+        thresholds: tuple[float, float] = (0.6, 0.4),
+        min_duration: float = 0.0,
+        max_age: float = 5.0,
+        lost_after: float = 1.0,
+        realtime: bool = False,
+        wait: bool = True,
+        **detector_kwargs: Any,
+    ) -> list[Results] | Iterator[Results]:
+        """Hybrid mode: a detector tracks objects, the decision model answers questions per track.
+
+        The detector never waits for decisions. A background scheduler picks which tracks to ask
+        about (new, changed, uncertain or stale), sends their crops within `budget`, and answers
+        are fused over time into per-track answers and `Event`s as they arrive.
+
+        Args:
+            source: Video file, camera index, stream URL, image or folder (anything the detector reads).
+            ask: Detector class name → questions, or a YAML/JSON file of the same shape. Each crop is
+                the state `{"image": crop}` (plus `frame` with `context="crop+frame"`).
+            detector: Ultralytics weights ("yolo11n.pt", "yoloe-11s-seg.pt", ...) or a `Detector`.
+            stream: Return a generator (use for long videos and live sources).
+            budget: Most decisions per second.
+            batch: Most crops per runtime call.
+            pad: Box expansion before cropping, per side (fraction of width/height).
+            context: "crop" or "crop+frame" (adds a downscaled full frame for relation questions).
+            half_life: Seconds for the temporal average to halve an old answer's weight.
+            thresholds: (on, off) noul probabilities for events (hysteresis).
+            min_duration: Seconds above `on` before an event starts.
+            max_age: Re-ask a track after this many seconds.
+            lost_after: Seconds unseen before a track is lost (its events end).
+            realtime: For video files, pace frames at the video's frame rate, as a camera would.
+            wait: For finite sources, answer still-queued crops at the end and yield one last
+                `Results` for the final frame with those answers and every open event closed.
+            **detector_kwargs: For a weights name: `conf`, `tracker`, `imgsz`, `device`, `classes`
+                (default: the classes in `ask`); anything else goes to `model.track` (e.g. `vid_stride`).
+        """
+        from s1ght.engine.fusion import Fusion
+        from s1ght.engine.scheduler import Scheduler
+
+        asked = self._ask(ask)
+        det, stream_kwargs = self._detector(detector, asked, detector_kwargs)
+        scheduler = Scheduler(
+            self.runtime, asked, budget, batch, pad=pad, context=context, max_age=max_age, lost_after=lost_after
+        )
+        fusion = Fusion(half_life, on=thresholds[0], off=thresholds[1], min_duration=min_duration)
+        self.scheduler = scheduler
+        frames = det.stream(source, **stream_kwargs)
+        results = self._track(frames, scheduler, fusion, realtime and not is_live(source), wait and not is_live(source))
+        return results if stream else list(results)
+
+    @staticmethod
+    def _ask(ask: Any) -> dict[str, QuestionSet]:
+        if isinstance(ask, (str, Path)):
+            ask = load_questions(ask)
+        if not isinstance(ask, dict) or not ask or not all(isinstance(v, dict) for v in ask.values()):
+            raise ValueError("ask must map detector class names to questions, e.g. {'person': {...}}")
+        return {cls: S1GHT._questions(qs) for cls, qs in ask.items()}
+
+    @staticmethod
+    def _detector(detector: Any, asked: dict[str, QuestionSet], kwargs: dict[str, Any]) -> tuple[Detector, dict]:
+        if isinstance(detector, Detector):
+            return detector, kwargs
+        from s1ght.detectors.ultralytics import UltralyticsDetector
+
+        ctor = {k: kwargs.pop(k) for k in ("conf", "tracker", "imgsz", "device", "classes") if k in kwargs}
+        ctor.setdefault("classes", list(asked))
+        return UltralyticsDetector(detector, **ctor), kwargs
+
+    def _track(
+        self, frames: Iterable[Frame], scheduler: Any, fusion: Any, realtime: bool, wait: bool
+    ) -> Iterator[Results]:
+        scheduler.start()
+        last_seen: dict[int, float] = {}
+        last: Results | None = None
+        wall0: float | None = None
+        try:
+            for frame in frames:
+                if realtime:
+                    wall0 = wall0 if wall0 is not None else time.monotonic() - frame.t
+                    ahead = frame.t - (time.monotonic() - wall0)
+                    if ahead > 0:
+                        time.sleep(ahead)
+                t0 = time.perf_counter()
+                scheduler.submit(frame)
+                submit_ms = (time.perf_counter() - t0) * 1000
+
+                events = [e for tid, qid, a, t in scheduler.drain() for e in fusion.update(tid, qid, a, t)]
+                present = [] if frame.ids is None else [int(i) for i in frame.ids]
+                for tid in present:
+                    last_seen[tid] = frame.t
+                for tid, seen in list(last_seen.items()):
+                    if frame.t - seen > scheduler.lost_after:
+                        events += fusion.close(tid, seen)
+                        scheduler.forget(tid)
+                        del last_seen[tid]
+                last = Results(
+                    orig_img=frame.image,
+                    boxes=Boxes(frame.xyxy, frame.conf, frame.cls, frame.ids, dict(frame.names)),
+                    answers={tid: fusion.state(tid) for tid in present if fusion.state(tid)},
+                    events=events,
+                    speed={**frame.speed, "submit": submit_ms},
+                    path=frame.path,
+                    frame=frame.index,
+                    model=self.name,
+                )
+                yield last
+            if wait and last is not None:
+                scheduler.stop()
+                scheduler.flush()
+                end = max(last_seen.values(), default=0.0)
+                events = [e for tid, qid, a, t in scheduler.drain() for e in fusion.update(tid, qid, a, t)]
+                answers: dict[int | None, dict[str, Any]] = {
+                    tid: a for tid, a in ((t, fusion.state(t)) for t in last_seen) if a
+                }
+                for tid in fusion.tracks():
+                    events += fusion.close(tid, last_seen.get(tid, end)) if tid is not None else []
+                yield Results(
+                    orig_img=last.orig_img,
+                    boxes=last.boxes,
+                    answers=answers,
+                    events=events,
+                    speed={},
+                    path=last.path,
+                    frame=last.frame,
+                    model=self.name,
+                )
+        finally:
+            scheduler.stop()
 
     def calibrate(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError("calibrate() arrives in P1 step 9")
