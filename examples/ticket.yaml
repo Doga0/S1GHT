@@ -1,0 +1,15 @@
+# Text-only questions (no image): the state is a support ticket.
+refund:
+  type: noul
+  instructions: "Is the customer asking for a refund?"
+team:
+  type: choice
+  instructions: "Which team should handle this?"
+  criteria:
+    billing: "Charges, invoices and refunds"
+    technical: "Faults and outages"
+    fraud: "Unauthorised use of the account"
+urgency:
+  type: score
+  instructions: "How urgent is this?"
+  criteria: ["Can wait", "Today", "Blocking the customer now"]

@@ -89,22 +89,28 @@ class S1GHT:
         return self.spec.entry.name if self.spec.entry else self.spec.model
 
     @staticmethod
-    def _questions(questions: QuestionSet | dict[str, dict[str, Any]]) -> QuestionSet:
+    def _questions(questions: QuestionSet | dict[str, dict[str, Any]] | str | Path) -> QuestionSet:
+        if isinstance(questions, (str, Path)):
+            loaded = load_questions(questions)
+            if any(not hasattr(q, "to_wire") for q in loaded.values()):
+                raise ValueError(f"{questions} is keyed by detector class; pass it to track(ask=...)")
+            return loaded  # type: ignore[return-value]
         if any(isinstance(q, dict) for q in questions.values()):
             return questions_from_wire(questions)  # type: ignore[arg-type]
         return questions  # type: ignore[return-value]
 
-    def decide(self, state: Any, questions: QuestionSet | dict[str, dict[str, Any]]) -> SystemOneResponse:
+    def decide(self, state: Any, questions: QuestionSet | dict[str, dict[str, Any]] | str | Path) -> SystemOneResponse:
         """Answer TypeSafe-style questions about one state (text, JSON and/or `Image`s).
 
-        `questions` maps ids to `Noul`/`Choice`/`Score`/`Box` objects, or to their wire dicts.
+        `questions` maps ids to `Noul`/`Choice`/`Score`/`Box` objects or to their wire dicts, or is
+        a YAML/JSON file of them.
         """
         return self.runtime.decide(SystemOneRequest(self.name, state, self._questions(questions)))
 
     def predict(
         self,
         source: Any,
-        questions: QuestionSet | dict[str, dict[str, Any]] | None = None,
+        questions: QuestionSet | dict[str, dict[str, Any]] | str | Path | None = None,
         *,
         queries: list[str] | None = None,
         localizer: str = "tiles",
@@ -122,7 +128,7 @@ class S1GHT:
         Args:
             source: Anything `s1ght.io.sources.load_source` accepts: image, folder, glob, URL,
                 video, camera index, stream URL, array, PIL image, or a list of these.
-            questions: Question id → question (objects or wire dicts).
+            questions: Question id → question (objects or wire dicts), or a YAML/JSON file.
             queries: Standalone detection queries (P2); not available yet.
             localizer: Standalone localizer for `queries` (P2).
             stream: Return a generator instead of a list (use for videos and live sources).

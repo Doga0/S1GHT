@@ -246,6 +246,14 @@ def test_transport_errors_become_systemone_errors(exc, code) -> None:
         assert "within 7" in str(e.value) and "timeout=" in str(e.value)
 
 
+def test_default_timeouts() -> None:
+    # local servers may run on a CPU: 60 s was too short for a 1280x720 photo with d1-omni in Ollama
+    for provider, seconds in (("typesafe", 60.0), ("ollama", 300.0), ("ollaya", 300.0)):
+        c = SystemOneClient(provider, "m")  # type: ignore[arg-type]
+        assert c._http.timeout.read == seconds
+        c.close()
+
+
 def test_unknown_provider() -> None:
     with pytest.raises(ValueError, match="unknown provider"):
         SystemOneClient("vllm", "m")  # type: ignore[arg-type]

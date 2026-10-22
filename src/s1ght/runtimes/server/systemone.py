@@ -123,7 +123,8 @@ class SystemOneClient(RuntimeBase):
         base_url: Server URL; defaults to the provider's env var (`TYPESAFE_BASE_URL`,
             `OLLAMA_HOST`, `OLLAYA_HOST`), then its standard address.
         api_key: Bearer token; defaults to `TYPESAFE_API_KEY` / `OLLAMA_API_KEY` / `OLLAYA_API_KEY`.
-        timeout: Seconds per HTTP request.
+        timeout: Seconds per HTTP request; default 60 for TypeSafe and 300 for local Ollama and
+            Ollaya servers, which may run on a CPU.
         max_retries: Retries on 408, 429 and 5xx, honouring `Retry-After`.
         backoff: First retry delay in seconds; doubles each retry.
         transport: Optional httpx transport (tests use `httpx.MockTransport`).
@@ -136,7 +137,7 @@ class SystemOneClient(RuntimeBase):
         *,
         base_url: str | None = None,
         api_key: str | None = None,
-        timeout: float = 60.0,
+        timeout: float | None = None,
         max_retries: int = 2,
         backoff: float = 0.5,
         transport: httpx.BaseTransport | None = None,
@@ -152,6 +153,8 @@ class SystemOneClient(RuntimeBase):
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self.max_retries, self.backoff = max_retries, backoff
         self._sleep: Callable[[float], None] = time.sleep
+        if timeout is None:
+            timeout = 60.0 if provider == "typesafe" else 300.0
         self._http = httpx.Client(base_url=self.base_url, headers=headers, timeout=timeout, transport=transport)
 
     def _prepare(self, req: SystemOneRequest) -> SystemOneRequest:
