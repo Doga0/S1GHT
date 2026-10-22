@@ -1,0 +1,46 @@
+# Defaults for `s1ght MODE key=value ...`. Any key can be given on the command line.
+# Each mode takes the model keys plus its own; `s1ght help` lists them.
+
+# model (every mode except `models` and `version`)
+model: d1-3b            # catalog name, runtime URI (ollama://..., typesafe://...), HF repo or folder
+runtime: null           # for catalog names: native, ollama, ollaya, ...
+device: null            # native only: cuda, cuda:1, mps, cpu
+calibration: null       # calibration profile JSON from `s1ght calibrate`
+timeout: null           # server runtimes: seconds per request
+
+# decide / predict / track
+source: null            # image, folder, glob, URL, video, camera index, stream URL
+questions: null         # decide / predict: YAML or JSON file of questions
+state: null             # decide: text or JSON state; with source=, sent as `context`
+context: null           # predict: extra state per frame; track: crop | crop+frame
+batch: 4                # predict / track / calibrate: requests per runtime call
+vid_stride: 1           # keep every n-th video frame
+show: false             # show results in a window (needs opencv-python, not headless)
+save: false             # predict / track: write annotated images or videos; calibrate: profile path
+save_dir: null          # where to save; default runs/<mode>, numbered when it exists
+json: false             # print one JSON line per result instead of a summary
+
+# track
+ask: null               # YAML or JSON file: detector class -> questions
+detector: yolo11n.pt
+conf: 0.25
+tracker: bytetrack.yaml
+imgsz: 640
+detector_device: null
+budget: 2.0             # most decisions per second
+pad: 0.2
+half_life: 1.0
+thresholds: [0.6, 0.4]  # (on, off) event hysteresis
+min_duration: 0.0
+max_age: 5.0
+lost_after: 1.0
+realtime: false
+
+# calibrate
+data: null              # labeled JSON Lines dataset
+folds: 5
+
+# serve
+host: 127.0.0.1
+port: 11436
+api_key: null
