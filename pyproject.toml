@@ -18,8 +18,8 @@ dependencies = [
 [project.optional-dependencies]
 native = ["torch>=2.4", "transformers>=5.14", "accelerate"]   # d1-3B transformers>=5.14 istiyor
 ultralytics = ["ultralytics>=8.4", "lap>=0.5.12"]             # AGPL-3.0; lap: ByteTrack (else auto-installed at run time)
-serve = ["fastapi", "uvicorn"]
-dev = ["pytest", "pytest-cov", "ruff", "mypy"]
+serve = ["fastapi>=0.115", "uvicorn>=0.30", "python-multipart>=0.0.18"]
+dev = ["pytest", "pytest-cov", "ruff", "mypy", "types-PyYAML", "typesafe-sdk"]   # typesafe-sdk: `serve` compatibility test
 all = ["s1ght[native,ultralytics,serve]"]
 
 [project.scripts]

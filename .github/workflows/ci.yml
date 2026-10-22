@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,serve]"
       - name: import s1ght without torch
         run: python -c "import importlib.util as u, s1ght; assert u.find_spec('torch') is None; print(s1ght.__version__)"
       - run: ruff check .

@@ -370,8 +370,26 @@ class S1GHT:
             self.load_calibration(profile)
         return profile
 
-    def serve(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError("serve() arrives in P1 step 10")
+    def serve(
+        self, host: str = "127.0.0.1", port: int = 11436, *, api_key: str | None = None, log_level: str = "info"
+    ) -> None:
+        """Serve this model as a `/v1/systemone` endpoint with images (see `s1ght.server`).
+
+        TypeSafe clients connect with `TYPESAFE_BASE_URL=http://<host>:<port>`. Blocks until stopped.
+
+        Args:
+            host: Interface to bind; "0.0.0.0" exposes it to the network (set `api_key` then).
+            port: 11436 by default, next to Ollama (11434) and Ollaya (11435).
+            api_key: If given, requests must send `Authorization: Bearer <api_key>`.
+            log_level: uvicorn log level.
+        """
+        from s1ght.server import create_app
+
+        try:
+            import uvicorn
+        except ImportError as e:
+            raise ImportError("serve() needs uvicorn: pip install 's1ght[serve]'") from e
+        uvicorn.run(create_app(self, api_key=api_key), host=host, port=port, log_level=log_level)
 
     def close(self) -> None:
         """Free the runtime (model memory, HTTP sessions)."""
