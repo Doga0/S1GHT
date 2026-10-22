@@ -6,7 +6,8 @@ as the T4 (7.5, no bf16) use `t4`, CPU uses `cpu`.
 
 Every answer goes through S1GHT's readout: the family's probabilities become log-scores
 (`RawScores`) and `scores_to_answers` turns them into TypeSafe answers, so `confidence` follows
-TypeSafe's definition for every model and a calibration temperature can be applied (step 9).
+TypeSafe's definition for every model; calibration profiles are applied on top
+(`s1ght.engine.calibration.CalibratedRuntime`).
 """
 
 from __future__ import annotations
@@ -87,7 +88,6 @@ class NativeRuntime(RuntimeBase):
         spec: A native `RuntimeSpec` from `s1ght.hub.resolve`.
         device: "cuda", "cuda:1", "mps" or "cpu"; picked automatically when None.
         dtype: "bf16", "fp16" or "fp32"; from the catalog's per-device table when None.
-        calibration: Calibration profile path; profiles arrive in P1 step 9.
         family: A ready adapter (tests); built from `spec.family` when None.
         path: Local model directory; downloaded from `spec.source` into the S1GHT cache when None.
     """
@@ -100,14 +100,11 @@ class NativeRuntime(RuntimeBase):
         *,
         device: str | None = None,
         dtype: str | None = None,
-        calibration: str | None = None,
         family: FamilyAdapter | None = None,
         path: str | None = None,
     ) -> None:
         if spec.runtime != "native":
             raise ValueError(f"NativeRuntime needs a native spec, got {spec.runtime!r}")
-        if calibration is not None:
-            raise NotImplementedError("calibration profiles arrive in P1 step 9")
         self.spec = spec
         self.model = spec.entry.name if spec.entry else spec.model
         self.temperature: float | dict[str, float] = 1.0
@@ -139,6 +136,10 @@ class NativeRuntime(RuntimeBase):
 
     def raw(self, req: SystemOneRequest) -> RawScores:
         return self._run([req])[0][0]
+
+    def raw_batch(self, reqs: list[SystemOneRequest]) -> list[RawScores]:
+        """`raw` for several requests in one family call."""
+        return [raw for raw, _ in self._run(reqs)]
 
     def decide(self, req: SystemOneRequest) -> SystemOneResponse:
         return self.decide_batch([req])[0]

@@ -166,8 +166,8 @@ def test_native_runtime_rejects_box_and_calibration() -> None:
     rt, _ = fake_runtime()
     with pytest.raises(CapabilityError, match="box"):
         rt.decide(SystemOneRequest("x", Image(drawing()), {"b": Box("the circle")}))
-    with pytest.raises(NotImplementedError, match="step 9"):
-        fake_runtime(calibration="profiles/d1-3b.json")
+    raws = rt.raw_batch([SystemOneRequest("x", "text", {"r": Noul("?")})] * 2)
+    assert len(raws) == 2 and set(raws[0].scores) == {"r"}
     with pytest.raises(ValueError, match="native spec"):
         NativeRuntime(resolve("d1-3b", runtime="ollaya"), family=FakeFamily(), path="/x")
 

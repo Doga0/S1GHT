@@ -13,12 +13,14 @@ for res in model.predict("bus.jpg", questions={"has_people": Noul("Are people vi
 
 from __future__ import annotations
 
+import hashlib
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any, Self
 
 from s1ght.detectors.base import Detector, Frame
+from s1ght.engine.calibration import CalibratedRuntime, CalibrationProfile, calibrate, load_examples
 from s1ght.engine.crops import fit_to_limits
 from s1ght.hub import RuntimeSpec, resolve
 from s1ght.io.sources import SourceFrame, is_live, load_source
@@ -38,7 +40,8 @@ class S1GHT:
             "hf://org/repo@rev"), HF repo id, local directory, or a ready `Runtime` object.
         runtime: For catalog names, which runtime to use ("native", "ollaya", ...).
         device: Native runtime only: "cuda", "cuda:1", "mps" or "cpu".
-        calibration: Calibration profile path (P1 step 9).
+        calibration: A calibration profile (path or `CalibrationProfile`) from `calibrate()`; applies
+            to any runtime with raw scores. Without one, answers are the runtime's uncalibrated readout.
         **kwargs: Passed to the runtime (e.g. `dtype` for native, `base_url`/`api_key` for servers).
     """
 
@@ -48,23 +51,38 @@ class S1GHT:
         *,
         runtime: str | None = None,
         device: str | None = None,
-        calibration: str | None = None,
+        calibration: str | Path | CalibrationProfile | None = None,
         **kwargs: Any,
     ) -> None:
         if not isinstance(model, str):
             if not isinstance(model, Runtime):
                 raise TypeError(f"model must be a name, URI or Runtime, got {type(model).__name__}")
-            if runtime or device or calibration or kwargs:
-                raise ValueError("runtime=, device=, calibration= and runtime options need a model name, not a Runtime")
+            if runtime or device or kwargs:
+                raise ValueError("runtime=, device= and runtime options need a model name, not a Runtime")
             self.spec = RuntimeSpec(runtime="custom", model=str(getattr(model, "model", type(model).__name__)))
-            self.runtime: Runtime = model
-            return
-        self.spec = resolve(model, runtime)
-        if self.spec.runtime == "native":
-            kwargs.update(device=device, calibration=calibration)
-        elif device is not None or calibration is not None:
-            raise ValueError(f"device= and calibration= apply to the native runtime, not {self.spec.runtime!r}")
-        self.runtime = load_runtime(self.spec, **kwargs)
+            base: Runtime = model
+        else:
+            self.spec = resolve(model, runtime)
+            if self.spec.runtime == "native":
+                kwargs.update(device=device)
+            elif device is not None:
+                raise ValueError(f"device= applies to the native runtime, not {self.spec.runtime!r}")
+            base = load_runtime(self.spec, **kwargs)
+        self.base_runtime: Runtime = base
+        self.runtime: Runtime = base
+        self.profile: CalibrationProfile | None = None
+        if calibration is not None:
+            self.load_calibration(calibration)
+
+    def load_calibration(self, profile: str | Path | CalibrationProfile) -> CalibrationProfile:
+        """Apply a calibration profile: answers use its temperatures from now on."""
+        if not isinstance(profile, CalibrationProfile):
+            profile = CalibrationProfile.load(profile)
+        if profile.model != self.name:
+            raise ValueError(f"profile was fitted for {profile.model!r}, not {self.name!r}")
+        self.profile = profile
+        self.runtime = CalibratedRuntime(self.base_runtime, profile, "full_frame")
+        return profile
 
     @property
     def name(self) -> str:
@@ -216,8 +234,9 @@ class S1GHT:
 
         asked = self._ask(ask)
         det, stream_kwargs = self._detector(detector, asked, detector_kwargs)
+        crops = self.runtime.with_input("crop") if isinstance(self.runtime, CalibratedRuntime) else self.runtime
         scheduler = Scheduler(
-            self.runtime, asked, budget, batch, pad=pad, context=context, max_age=max_age, lost_after=lost_after
+            crops, asked, budget, batch, pad=pad, context=context, max_age=max_age, lost_after=lost_after
         )
         fusion = Fusion(half_life, on=thresholds[0], off=thresholds[1], min_duration=min_duration)
         self.scheduler = scheduler
@@ -304,8 +323,52 @@ class S1GHT:
         finally:
             scheduler.stop()
 
-    def calibrate(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError("calibrate() arrives in P1 step 9")
+    def calibrate(
+        self,
+        data: str | Path,
+        *,
+        save: str | Path | None = None,
+        folds: int = 5,
+        batch: int = 8,
+        apply: bool = True,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> CalibrationProfile:
+        """Fit temperatures on a labeled JSON Lines dataset (see `s1ght.engine.calibration`).
+
+        Args:
+            data: Dataset file. Examples with `"split": "test"` are only used to report metrics;
+                without a test split, metrics come from k-fold out-of-fold predictions.
+            save: Where to write the profile JSON.
+            folds: k for out-of-fold metrics.
+            batch: Requests per runtime call.
+            apply: Use the new profile for this model's answers from now on.
+            progress: Called with (done, total) after each batch.
+        """
+        path = Path(data)
+        examples = load_examples(path)
+        source = str(self.spec.source) if self.spec.source is not None else self.spec.model
+        dataset = {
+            "path": str(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "examples": len(examples),
+            "splits": {s: sum(e.split == s for e in examples) for s in sorted({e.split for e in examples})},
+        }
+        profile = calibrate(
+            self.base_runtime,
+            examples,
+            model=self.name,
+            runtime_name=self.spec.runtime,
+            source=source,
+            folds=folds,
+            batch=batch,
+            dataset=dataset,
+            progress=progress,
+        )
+        if save is not None:
+            profile.save(save)
+        if apply:
+            self.load_calibration(profile)
+        return profile
 
     def serve(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError("serve() arrives in P1 step 10")
