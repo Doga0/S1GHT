@@ -1,15 +1,28 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.27", "hatch-fancy-pypi-readme>=24.1"]
 build-backend = "hatchling.build"
 
 [project]
 name = "s1ght"
-version = "0.1.0.dev0"
-description = "S1GHT — Real-Time Visual Decisions"
-readme = "README.md"
+dynamic = ["version", "readme"]   # version: src/s1ght/__init__.py; readme: README.md with absolute links
+description = "S1GHT — Real-Time Visual Decisions: detection and state questions with decision models"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
+keywords = ["computer-vision", "object-detection", "vision-language-models", "decision-models", "typesafe", "yolo"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Image Recognition",
+  "Typing :: Typed",
+]
 dependencies = [
   "numpy>=1.24", "pillow>=10", "opencv-python-headless>=4.8",
   "httpx>=0.27", "pyyaml>=6", "huggingface_hub>=0.24",
@@ -25,8 +38,35 @@ all = ["s1ght[native,ultralytics,serve]"]
 [project.scripts]
 s1ght = "s1ght.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/Doga0/S1GHT"
+Documentation = "https://github.com/Doga0/S1GHT/tree/main/docs"
+Changelog = "https://github.com/Doga0/S1GHT/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Doga0/S1GHT/issues"
+
+[tool.hatch.version]
+path = "src/s1ght/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/s1ght"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/s1ght", "tests", "docs", "examples", "benchmarks/*.py", "scripts", "README.md", "CHANGELOG.md", "LICENSE"]
+
+# PyPI shows README.md without the repository around it: point relative links and images at GitHub
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(srcset|src)="(?!https?://)([^"]+)"'
+replacement = '\1="https://raw.githubusercontent.com/Doga0/S1GHT/main/\2"'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|#)([^)]+)\)'
+replacement = '](https://github.com/Doga0/S1GHT/blob/main/\1)'
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

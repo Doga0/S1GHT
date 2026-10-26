@@ -26,6 +26,20 @@ jobs:
       - run: ruff check .
       - run: pytest
 
+  package:
+    # the sdist and wheel build, hold the package data, and render on PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install build twine
+      - run: python -m build
+      - run: python scripts/check_dist.py dist/
+      - run: twine check --strict dist/*
+
   native:
     # CPU torch environment: slow-marked tests. GPU tests run on a self-hosted runner later.
     runs-on: ubuntu-latest

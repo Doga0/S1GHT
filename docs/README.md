@@ -12,5 +12,6 @@ Start with the [project README](../README.md) for installation and a first decis
 | [Command line](cli.md) | every mode and key |
 | [Server](server.md) | `s1ght serve` and TypeSafe clients |
 | [Architecture](architecture.md) | layout, custom runtimes, families, detectors and catalog entries |
+| [Releasing](releasing.md) | versions, the changelog and publishing to PyPI |
 
 Runnable scripts are in [examples/](../examples/).

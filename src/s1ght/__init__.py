@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0"  # the single source of the package version (pyproject reads it)
 
 _LAZY: dict[str, str] = {
     "S1GHT": "s1ght.model",

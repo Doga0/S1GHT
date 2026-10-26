@@ -6,6 +6,7 @@ import py_compile
 import re
 import subprocess
 import sys
+from importlib import resources
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +42,13 @@ def test_decide_and_predict_take_question_files() -> None:
 def test_examples_and_docs_stay_visual() -> None:
     """S1GHT's scope is visual decisions: no text-only or audio use in examples, docs or the catalog."""
     banned = re.compile(r"(?i)\baudio\b|support ticket|charged twice|ticket\.yaml|decide_text")
-    files = [*DOCS, *EXAMPLES.glob("*.py"), *EXAMPLES.glob("*.yaml"), ROOT / "src" / "s1ght" / "registry.yaml"]
+    # the catalog through the installed package, so the test also runs against a built wheel
+    files = [
+        *DOCS,
+        *EXAMPLES.glob("*.py"),
+        *EXAMPLES.glob("*.yaml"),
+        Path(str(resources.files("s1ght") / "registry.yaml")),
+    ]
     hits = [f"{f.name}: {m.group(0)}" for f in files for m in banned.finditer(f.read_text(encoding="utf-8"))]
     allowed = {"models.md: audio"}  # the scope note says d1-omni's audio input is out of scope
     assert [h for h in hits if h not in allowed] == []
