@@ -88,7 +88,6 @@ class ModelEntry:
     name: str
     source: HFRef
     family: str
-    modalities: tuple[str, ...]
     runtimes: dict[str, Any]
     calibration: str | None = None
     license: str = ""
@@ -142,7 +141,6 @@ def load_registry(path: str | Path | None = None) -> dict[str, ModelEntry]:
             name=name,
             source=HFRef.parse(e["source"]),
             family=family,
-            modalities=tuple(e.get("modalities", ("text",))),
             runtimes=runtimes,
             calibration=e.get("calibration"),
             license=str(e.get("license", "")),

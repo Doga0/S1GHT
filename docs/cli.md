@@ -4,7 +4,7 @@
 s1ght MODE key=value ...
 ```
 
-Like Ultralytics: a mode, then `key=value` pairs. Values are read as YAML (`show=True`, `budget=4`, `thresholds=[0.7,0.3]`, `state={"a": 1}`); names, paths and URIs stay text. `none` or an empty value means "not set". Dashes work too: `--port=8000`, `api-key=...`. A mistyped mode or key gets a suggestion. Defaults live in `src/s1ght/cfg/default.yaml`.
+Like Ultralytics: a mode, then `key=value` pairs. Values are read as YAML (`show=True`, `budget=4`, `thresholds=[0.7,0.3]`, `state={"camera": 3}`); names, paths and URIs stay text. `none` or an empty value means "not set". Dashes work too: `--port=8000`, `api-key=...`. A mistyped mode or key gets a suggestion. Defaults live in `src/s1ght/cfg/default.yaml`.
 
 Exit codes: `0` success, `1` runtime error (missing file, unreachable server, ...), `2` bad command line.
 
@@ -32,7 +32,7 @@ Exit codes: `0` success, `1` runtime error (missing file, unreachable server, ..
 | `calibration` | | profile JSON from `calibrate` |
 | `timeout` | | server runtimes: seconds per request |
 
-**decide**: `source` (an image, sent as `image`), `questions` (YAML/JSON file), `state` (text or JSON; with `source` it is sent as `context`).
+**decide**: `source` (an image, sent as `image`), `questions` (YAML/JSON file), `state` (optional text or JSON context sent next to the image as `context`, e.g. a camera name).
 
 **predict**:
 
@@ -79,7 +79,7 @@ Without `json=True`, `track` prints events as they start and end, then a summary
 
 ```bash
 s1ght decide model=d1-omni-600m runtime=ollama source=bus.jpg questions=examples/questions.yaml
-s1ght decide model=qwen3-vl-4b state="I was charged twice, please refund one." questions=examples/ticket.yaml
+s1ght decide model=qwen3-vl-4b source=gate.jpg state="camera: gate 3, forklifts only" questions=examples/inspection.yaml
 s1ght predict model=d1-omni-600m source="photos/*.jpg" questions=examples/questions.yaml save=True
 s1ght track model=d1-omni-600m source=0 ask=examples/ask.yaml show=True budget=4
 s1ght track model=d1-omni-600m source=site.mp4 ask=examples/ask.yaml save=True json=True > events.jsonl

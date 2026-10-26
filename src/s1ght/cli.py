@@ -262,21 +262,19 @@ def run_decide(cfg: dict[str, Any]) -> None:
     from s1ght.schema.assets import Image
     from s1ght.schema.questions import load_questions
 
-    require(cfg, "questions", mode="decide")
-    if cfg["source"] is None and cfg["state"] is None:
-        raise UsageError("decide needs source=<image> and/or state=<text or JSON>")
+    require(cfg, "source", "questions", mode="decide")
     questions = load_questions(cfg["questions"])
     if any(not hasattr(q, "to_wire") for q in questions.values()):
         raise UsageError(f"{cfg['questions']} is keyed by detector class; use it with track ask=")
-    state: Any = cfg["state"]
-    if isinstance(state, str):
+    context: Any = cfg["state"]
+    if isinstance(context, str):
         try:
-            state = json.loads(state)
+            context = json.loads(context)
         except json.JSONDecodeError:
             pass
-    if cfg["source"] is not None:
-        image = {"image": Image(str(cfg["source"]))}
-        state = image if state is None else {**image, "context": state}
+    state: dict[str, Any] = {"image": Image(str(cfg["source"]))}
+    if context is not None:
+        state["context"] = context
     with load_model(cfg) as model:
         print(json.dumps(model.decide(state, questions).to_wire(), indent=2))
 
@@ -394,8 +392,8 @@ def run_serve(cfg: dict[str, Any]) -> None:
 def run_models(cfg: dict[str, Any]) -> None:
     from s1ght.hub import load_registry
 
-    rows = [(e.name, ", ".join(e.runtimes), ", ".join(e.modalities), e.license) for e in load_registry().values()]
-    head = ("name", "runtimes", "inputs", "license")
+    rows = [(e.name, ", ".join(e.runtimes), e.family, e.license) for e in load_registry().values()]
+    head = ("name", "runtimes", "family", "license")
     widths = [max(len(r[i]) for r in [head, *rows]) for i in range(len(head))]
     for r in [head, *rows]:
         print("  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip())

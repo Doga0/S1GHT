@@ -11,7 +11,7 @@ timeout: null           # server runtimes: seconds per request
 # decide / predict / track
 source: null            # image, folder, glob, URL, video, camera index, stream URL
 questions: null         # decide / predict: YAML or JSON file of questions
-state: null             # decide: text or JSON state; with source=, sent as `context`
+state: null             # decide: text or JSON context sent next to the image (as `context`)
 context: null           # predict: extra state per frame; track: crop | crop+frame
 batch: 4                # predict / track / calibrate: requests per runtime call
 vid_stride: 1           # keep every n-th video frame

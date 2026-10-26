@@ -81,7 +81,7 @@ s1ght decide model=d1-omni-600m runtime=ollama source=bus.jpg questions=examples
 | `Score(instructions, criteria)` | an ordered level, 2–10 levels, lowest first | `score` (expected level), `probabilities`, `confidence` |
 | `Box(instructions)` | where one target is | `box`: `top`, `bottom`, `left`, `right` as fractions (TypeSafe `jev-preview` only) |
 
-The `state` is text, JSON or a dict with `Image` values; questions refer to images by their key (`` `photo` ``). Questions can also live in YAML:
+The `state` holds one or more `Image`s, optionally with text or JSON context (a camera name, a zone); questions refer to images by their key (`` `photo` ``). Questions can also live in YAML:
 
 ```yaml
 bus: {type: noul, instructions: "Is there a bus in `image`?"}
@@ -132,11 +132,11 @@ s1ght track model=d1-omni-600m source=0 ask=examples/ask.yaml show=True
 
 A model name picks the weights; a **runtime** picks what runs them.
 
-| Name | Weights | Runtimes | Inputs | License |
-| --- | --- | --- | --- | --- |
-| `d1-3b` | LiquidAI/d1-3B | native, ollaya, llama_cpp | text, image | LFM Open License 1.0 |
-| `d1-omni-600m` | LiquidAI/d1-omni-600M | native, ollama, llama_cpp | text, image, audio | LFM Open License 1.0 |
-| `qwen3-vl-4b` | Qwen/Qwen3-VL-4B-Instruct | native, vllm, llama_server | text, image | Apache-2.0 |
+| Name | Weights | Runtimes | License |
+| --- | --- | --- | --- |
+| `d1-3b` | LiquidAI/d1-3B | native, ollaya, llama_cpp | LFM Open License 1.0 |
+| `d1-omni-600m` | LiquidAI/d1-omni-600M | native, ollama, llama_cpp | LFM Open License 1.0 |
+| `qwen3-vl-4b` | Qwen/Qwen3-VL-4B-Instruct | native, vllm, llama_server | Apache-2.0 |
 
 The LFM Open License 1.0 does not cover commercial use by organizations with more than US$10M annual revenue. Every catalog entry is pinned to a Hugging Face commit.
 
@@ -176,7 +176,7 @@ The official `typesafe-sdk` works against it unchanged. See [docs/server.md](doc
 ## Command line
 
 ```bash
-s1ght decide    model=... source=img.jpg questions=q.yaml [state="..."]
+s1ght decide    model=... source=img.jpg questions=q.yaml [state="camera 3"]
 s1ght predict   model=... source=photos/ questions=q.yaml save=True
 s1ght track     model=... source=video.mp4 ask=ask.yaml save=True show=True
 s1ght calibrate model=... data=manifest.jsonl save=profile.json

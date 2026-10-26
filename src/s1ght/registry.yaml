@@ -16,7 +16,6 @@
 d1-3b:
   source: hf://LiquidAI/d1-3B@051bcc464b01b9f92942b364d9586b0ef5912432
   family: lfm2_vl
-  modalities: [text, image]
   runtimes:
     native: {dtype: {cuda: bf16, t4: fp16, cpu: fp32}}
     ollaya: d1:3b-vision
@@ -30,7 +29,6 @@ d1-3b:
 d1-omni-600m:
   source: hf://LiquidAI/d1-omni-600M@02b55d7076f15129e59ab3f94783f32c4b088674
   family: d1_omni
-  modalities: [text, image, audio]
   runtimes:
     native: {dtype: {cuda: fp16, t4: fp16, cpu: fp32}}   # the model card advises against bf16
     ollama: hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0
@@ -44,7 +42,6 @@ d1-omni-600m:
 qwen3-vl-4b:
   source: hf://Qwen/Qwen3-VL-4B-Instruct@ebb281ec70b05090aa6165b016eac8ec08e71b17
   family: qwen_vl
-  modalities: [text, image]
   runtimes:
     native: {dtype: {cuda: bf16, t4: fp16, cpu: fp32}}
     vllm: {model: Qwen/Qwen3-VL-4B-Instruct}
