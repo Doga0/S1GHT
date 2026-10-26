@@ -68,6 +68,19 @@ s1ght bench model=d1-omni-600m runtime=ollama sizes=[256,640] batches=[1,4]
 python benchmarks/latency.py d1-omni-600m:native d1-omni-600m:ollama
 ```
 
+On GPUs (native runtime, catalog dtype: fp16 for d1-omni-600M everywhere, bf16 on the A100 and fp16 on the T4 for the others), one Noul per image, warm median ms per image at batch 1 / 4 / 16:
+
+| Model | GPU | 128 px | 384 px | 640 px | Peak VRAM |
+| --- | --- | ---: | ---: | ---: | ---: |
+| d1-omni-600m | A100 80 GB | 30 / 15 / 11 | 31 / 16 / 12 | 38 / 21 / 17 | 1.3 GB |
+| d1-omni-600m | T4 | 39 / 20 / 20 | 36 / 23 / 23 | 39 / 31 / 32 | 1.3 GB |
+| d1-3b | A100 80 GB | 51 / 51 / 51 | 51 / 51 / 51 | 55 / 55 / 56 | 6.0 GB |
+| d1-3b | T4 | 70 / 70 / 71 | 99 / 100 / 104 | 198 / 204 / 195 | 6.0 GB |
+| qwen3-vl-4b | A100 80 GB | 86 / 27 / 27 | 85 / 28 / 28 | 92 / 48 / 46 | 9.0 GB |
+| qwen3-vl-4b | T4 | 177 / 159 / 174 | 200 / 176 / 181 | 401 / 400 / 402 | 9.2 GB |
+
+On a GPU, batching pays off for d1-omni-600M (up to 2.7× on the A100) and Qwen3-VL-4B (3× on the A100), but not for d1-3B, whose time per image stays flat at every batch size. d1-omni-600M at batch 16 on the A100 reaches 80–89 images/s up to 384 px. On a T4, Qwen3-VL-4B costs about twice as much at 640 px as at 384 px, so the image size matters there.
+
 d1-omni-600M on a laptop CPU (Intel Core i7-13700H, 32 GB), one Noul per image, warm median ms per image:
 
 | Longer side | native fp32, batch 1 | native fp32, batch 4 | native fp32, batch 16 | Ollama Q8_0, batch 1 | Ollama Q8_0, batch 16 |
