@@ -4,7 +4,7 @@ All notable changes to S1GHT. Versions follow [semantic versioning](https://semv
 
 ## [Unreleased]
 
-## [0.1.0] - not released yet (the date is added when the tag is pushed)
+## [0.1.0] - 2026-10-26
 
 The first release: the shared core and hybrid mode (P1).
 
@@ -23,6 +23,8 @@ The first release: the shared core and hybrid mode (P1).
 - **`Results`:** `plot()`, `save()`, `to_systemone()`, `to_json()`.
 - **Calibration:** per question type and input kind, with held-out ECE/Brier/NLL reports, profiles bound to model and source, and a hard-hat state-pair benchmark.
 - **Option-letter readout with order debiasing:** cyclic rotations for up to 4 options. Native and server paths send the same prompts and pixels.
-- **`s1ght` command line:** `decide`, `predict`, `track`, `calibrate`, `serve`, `models`.
+- **`s1ght` command line:** `decide`, `predict`, `track`, `calibrate`, `serve`, `bench`, `models`.
+- **`s1ght bench`:** latency by image size and batch size (`benchmarks/latency.py` for several models at once), with measured CPU and GPU (T4, A100, RTX PRO 6000) tables in `docs/models.md`.
 - **`s1ght serve`:** any model as `/v1/systemone` with images. The official TypeSafe SDK connects with `TYPESAFE_BASE_URL`.
-- **Documentation and runnable examples.**
+- **Documentation and runnable examples**, all visual: images with optional text context. Text-only and audio use are out of scope.
+- **Releases:** the version lives only in `s1ght.__version__`, and a `v*` tag publishes to PyPI after the wheel's tests pass.
