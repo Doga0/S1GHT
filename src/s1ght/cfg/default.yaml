@@ -16,7 +16,7 @@ context: null           # predict: extra state per frame; track: crop | crop+fra
 batch: 4                # predict / track / calibrate: requests per runtime call
 vid_stride: 1           # keep every n-th video frame
 show: false             # show results in a window (needs opencv-python, not headless)
-save: false             # predict / track: write annotated images or videos; calibrate: profile path
+save: false             # predict / track: write annotated images or videos; calibrate / bench: output path
 save_dir: null          # where to save; default runs/<mode>, numbered when it exists
 json: false             # print one JSON line per result instead of a summary
 
@@ -39,6 +39,13 @@ realtime: false
 # calibrate
 data: null              # labeled JSON Lines dataset
 folds: 5
+
+# bench (source: an image to resize instead of the synthetic scene; save: JSON path)
+sizes: [128, 256, 384, 640]  # longer image side in px
+batches: [1, 4, 16]     # images per runtime call
+runs: 5                 # timed calls per (size, batch)
+warmup: 1               # untimed calls first
+max_time: 60.0          # seconds of timed calls per (size, batch); at least one call
 
 # serve
 host: 127.0.0.1
