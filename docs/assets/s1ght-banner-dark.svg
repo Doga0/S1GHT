@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" width="1280" height="400" role="img" aria-labelledby="t d">
+<title id="t">S1GHT — Real-Time Visual Decisions</title>
+<desc id="d">A recorded S1GHT run: d1-omni-600M is asked "Is the person wearing a hard hat?" about two tracked people for 14 seconds. The worker in a red hard hat stays near 0.8 and raises an event; the man without one stays near 0.4, inside the uncertain band, so the scheduler keeps asking about him.</desc>
+<style>
+text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;}
+@keyframes reveal{0%{width:0}72.0%,100%{width:578px}}
+@keyframes cursor{0%{transform:translateX(0);opacity:1}72.0%{transform:translateX(518px);opacity:1}72.5%,100%{transform:translateX(518px);opacity:0}}
+.reveal{animation:reveal 12.5s linear infinite}
+.cursor{animation:cursor 12.5s linear infinite}
+@keyframes done{0%,71.0%{opacity:0}74.0%,100%{opacity:1}}
+.done{animation:done 12.5s linear infinite}
+@media (prefers-reduced-motion:reduce){.reveal{animation:none;width:578px}.cursor{display:none}.done{animation:none}}
+</style>
+<clipPath id="now"><rect class="reveal" x="550" y="0" width="578" height="400"/></clipPath>
+<rect width="1280" height="400" fill="#0F1012"/>
+<g transform="translate(56 62) scale(0.875)"><path d="M4 20V4H20M44 4H60V20M60 44V60H44M20 60H4V44" fill="none" stroke="#E8E6E1" stroke-width="5" stroke-linecap="square"/><path d="M14 40H50" stroke="#8A8E96" stroke-width="3" stroke-dasharray="8 6"/><circle cx="32" cy="26" r="7" fill="#FF7A2E"/></g>
+<text x="128" y="112" font-size="64" font-weight="700" fill="#E8E6E1" letter-spacing="3">S1GHT</text>
+<text x="58" y="152" font-size="18" fill="#E8E6E1">real-time visual decisions</text>
+<text x="58" y="186" font-size="15" fill="#8A8E96">ask a detector's objects typed</text>
+<text x="58" y="206" font-size="15" fill="#8A8E96">questions; get calibrated</text>
+<text x="58" y="226" font-size="15" fill="#8A8E96">probabilities, not text</text>
+<text x="58" y="338" font-size="12" fill="#8A8E96">recorded run · d1-omni-600M (Ollama)</text>
+<text x="58" y="356" font-size="12" fill="#8A8E96">hard-hat calibration profile</text>
+<text x="58" y="374" font-size="12" fill="#8A8E96">photo: Voxel51/hard-hat-detection, CC0</text>
+<text x="560" y="52" font-size="15" fill="#E8E6E1">p( person in `image` wearing a hard hat? )</text>
+<rect x="560" y="166.8" width="518" height="44.4" fill="#1C1D20"/>
+<line x1="560" y1="78" x2="560" y2="300" stroke="#E8E6E1" stroke-width="1.5"/>
+<line x1="560" y1="300" x2="1078" y2="300" stroke="#E8E6E1" stroke-width="1.5"/>
+<text x="1078" y="158.8" font-size="13" fill="#8A8E96" text-anchor="end">uncertain band 0.4–0.6</text>
+<text x="550" y="305.0" font-size="14" fill="#8A8E96" text-anchor="end">0</text>
+<text x="550" y="216.2" font-size="14" fill="#8A8E96" text-anchor="end">0.4</text>
+<text x="550" y="171.8" font-size="14" fill="#8A8E96" text-anchor="end">0.6</text>
+<text x="550" y="83.0" font-size="14" fill="#8A8E96" text-anchor="end">1</text>
+<line x1="560.0" y1="300" x2="560.0" y2="306" stroke="#E8E6E1"/>
+<text x="560.0" y="324" font-size="14" fill="#8A8E96" text-anchor="middle">0s</text>
+<line x1="634.5" y1="300" x2="634.5" y2="306" stroke="#E8E6E1"/>
+<text x="634.5" y="324" font-size="14" fill="#8A8E96" text-anchor="middle">2s</text>
+<line x1="709.1" y1="300" x2="709.1" y2="306" stroke="#E8E6E1"/>
+<text x="709.1" y="324" font-size="14" fill="#8A8E96" text-anchor="middle">4s</text>
+<line x1="783.6" y1="300" x2="783.6" y2="306" stroke="#E8E6E1"/>
+<text x="783.6" y="324" font-size="14" fill="#8A8E96" text-anchor="middle">6s</text>
+<line x1="858.1" y1="300" x2="858.1" y2="306" stroke="#E8E6E1"/>
+<text x="858.1" y="324" font-size="14" fill="#8A8E96" text-anchor="middle">8s</text>
+<line x1="932.7" y1="300" x2="932.7" y2="306" stroke="#E8E6E1"/>
+<text x="932.7" y="324" font-size="14" fill="#8A8E96" text-anchor="middle">10s</text>
+<line x1="1007.2" y1="300" x2="1007.2" y2="306" stroke="#E8E6E1"/>
+<text x="1007.2" y="324" font-size="14" fill="#8A8E96" text-anchor="middle">12s</text>
+<image x="452" y="81.3" width="64" height="88" href="data:image/jpeg;base64,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"/>
+<rect x="452" y="81.3" width="64" height="88" fill="none" stroke="#E8E6E1" stroke-width="1.5"/>
+<path d="M516 125.3H530L538 125.3" fill="none" stroke="#E8E6E1"/>
+<text x="442" y="130.3" font-size="14" fill="#8A8E96" text-anchor="end">#2</text>
+<image x="434" y="166.6" width="82" height="88" href="data:image/jpeg;base64,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"/>
+<rect x="434" y="166.6" width="82" height="88" fill="none" stroke="#E8E6E1" stroke-width="1.5"/>
+<path d="M516 210.6H530L538 210.6" fill="none" stroke="#E8E6E1"/>
+<text x="424" y="215.6" font-size="14" fill="#8A8E96" text-anchor="end">#1</text>
+<g clip-path="url(#now)">
+<path d="M615.9 109.5H876.8V119.0H1078.0V125.3H1078.0" fill="none" stroke="#E8E6E1" stroke-width="3"/>
+<circle cx="560.0" cy="109.5" r="5.5" fill="#0F1012" stroke="#E8E6E1" stroke-width="2.5"/>
+<rect x="558.5" y="364" width="3" height="16" fill="#E8E6E1"/>
+<circle cx="787.3" cy="119.1" r="5.5" fill="#0F1012" stroke="#E8E6E1" stroke-width="2.5"/>
+<rect x="785.8" y="364" width="3" height="16" fill="#E8E6E1"/>
+<circle cx="988.6" cy="125.4" r="5.5" fill="#0F1012" stroke="#E8E6E1" stroke-width="2.5"/>
+<rect x="987.1" y="364" width="3" height="16" fill="#E8E6E1"/>
+<path d="M615.9 216.6H675.5V201.6H727.7V207.3H779.9V214.8H876.8V217.4H936.4V219.1H984.8V208.5H1078.0V209.8H1078.0V210.6H1078.0" fill="none" stroke="#FF7A2E" stroke-width="3"/>
+<circle cx="560.0" cy="216.6" r="5.5" fill="#0F1012" stroke="#FF7A2E" stroke-width="2.5"/>
+<rect x="558.5" y="342" width="3" height="16" fill="#FF7A2E"/>
+<circle cx="630.8" cy="196.0" r="5.5" fill="#0F1012" stroke="#FF7A2E" stroke-width="2.5"/>
+<rect x="629.3" y="342" width="3" height="16" fill="#FF7A2E"/>
+<circle cx="679.3" cy="211.2" r="5.5" fill="#0F1012" stroke="#FF7A2E" stroke-width="2.5"/>
+<rect x="677.8" y="342" width="3" height="16" fill="#FF7A2E"/>
+<circle cx="735.2" cy="218.7" r="5.5" fill="#0F1012" stroke="#FF7A2E" stroke-width="2.5"/>
+<rect x="733.7" y="342" width="3" height="16" fill="#FF7A2E"/>
+<circle cx="787.3" cy="219.0" r="5.5" fill="#0F1012" stroke="#FF7A2E" stroke-width="2.5"/>
+<rect x="785.8" y="342" width="3" height="16" fill="#FF7A2E"/>
+<circle cx="891.7" cy="219.4" r="5.5" fill="#0F1012" stroke="#FF7A2E" stroke-width="2.5"/>
+<rect x="890.2" y="342" width="3" height="16" fill="#FF7A2E"/>
+<circle cx="940.1" cy="201.0" r="5.5" fill="#0F1012" stroke="#FF7A2E" stroke-width="2.5"/>
+<rect x="938.6" y="342" width="3" height="16" fill="#FF7A2E"/>
+<circle cx="988.6" cy="210.8" r="5.5" fill="#0F1012" stroke="#FF7A2E" stroke-width="2.5"/>
+<rect x="987.1" y="342" width="3" height="16" fill="#FF7A2E"/>
+<circle cx="1078.0" cy="210.8" r="5.5" fill="#0F1012" stroke="#FF7A2E" stroke-width="2.5"/>
+<rect x="1076.5" y="342" width="3" height="16" fill="#FF7A2E"/>
+<path d="M615.9 105.286V95.286H1078V105.286" fill="none" stroke="#E8E6E1" stroke-width="1.5"/>
+<text x="623.9" y="87.286" font-size="14" fill="#E8E6E1">event: hard_hat on, #2</text>
+</g>
+<line class="cursor" x1="560" y1="72" x2="560" y2="378" stroke="#8A8E96"/>
+<text x="550" y="355" font-size="13" fill="#8A8E96" text-anchor="end">asked #1</text>
+<text x="550" y="377" font-size="13" fill="#8A8E96" text-anchor="end">#2</text>
+<g class="done">
+<text x="1104" y="133.3" font-size="24" font-weight="700" fill="#E8E6E1">0.79</text>
+<text x="1104" y="155.3" font-size="13" fill="#8A8E96">asked 3×</text>
+<text x="1104" y="218.6" font-size="24" font-weight="700" fill="#FF7A2E">0.40</text>
+<text x="1104" y="240.6" font-size="13" fill="#8A8E96">asked 9×</text>
+</g>
+<text x="1104" y="355" font-size="13" fill="#8A8E96">unsure → re-asked</text>
+</svg>

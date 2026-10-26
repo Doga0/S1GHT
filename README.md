@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/s1ght-banner-dark.svg">
+  <img src="docs/assets/s1ght-banner-light.svg" width="100%" alt="A recorded S1GHT run: d1-omni-600M is asked whether each of two tracked workers wears a hard hat. The worker in a red hard hat stays near 0.79 and raises an event; the man without one stays near 0.40, inside the uncertain band, and is asked 9 times.">
+</picture>
+
 # S1GHT — Real-Time Visual Decisions
 
 S1GHT asks decision models typed questions about images and video: *is this person wearing a hard hat?*, *which of these four is the scene?*, *how crowded is it, from 0 to 3?* Answers are calibrated probabilities, not generated text. On video, a detector tracks objects and S1GHT asks about each track in the background, so the detector never waits for the decision model.
