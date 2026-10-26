@@ -5,6 +5,7 @@
     s1ght track     model=d1-3b source=0 ask=ask.yaml show=True
     s1ght calibrate model=d1-3b data=state_pairs/manifest.jsonl
     s1ght serve     model=d1-3b port=11436
+    s1ght bench     model=d1-3b sizes=[256,640] batches=[1,8]
     s1ght models | version | help
 
 Defaults come from `s1ght/cfg/default.yaml`. Values are read as YAML (`show=True`,
@@ -52,6 +53,7 @@ MODE_KEYS: dict[str, tuple[str, ...]] = {
     ),
     "calibrate": (*MODEL_KEYS, *["data", "folds", "batch", "save", "save_dir"]),
     "serve": (*MODEL_KEYS, "host", "port", "api_key"),
+    "bench": (*MODEL_KEYS, *["sizes", "batches", "questions", "source", "runs", "warmup", "max_time", "save", "json"]),
     "models": (),
     "version": (),
     "help": (),
@@ -379,6 +381,49 @@ def run_calibrate(cfg: dict[str, Any]) -> None:
     print(f"use it with: calibration={path}")
 
 
+def run_bench(cfg: dict[str, Any]) -> None:
+    from s1ght.bench import bench, table
+    from s1ght.io.sources import read_image
+    from s1ght.schema.questions import load_questions
+
+    def ints(key: str) -> list[int]:
+        v = cfg[key]
+        values = v if isinstance(v, list) else [v]
+        if not values or not all(isinstance(x, int) and x > 0 for x in values):
+            raise UsageError(f"{key} takes positive integers, e.g. {key}=[1,4]")
+        return values
+
+    questions = None
+    if cfg["questions"] is not None:
+        questions = load_questions(cfg["questions"])
+        if any(not hasattr(q, "to_wire") for q in questions.values()):
+            raise UsageError(f"{cfg['questions']} is keyed by detector class; bench needs flat questions")
+    image = read_image(cfg["source"]) if cfg["source"] is not None else None
+    sizes, batches = ints("sizes"), ints("batches")
+
+    def progress(row: Any) -> None:
+        if not cfg["json"]:
+            print(
+                f"  size {row.size:4d}  batch {row.batch:3d}: {row.ms_per_image} ms/image", file=sys.stderr, flush=True
+            )
+
+    with load_model(cfg) as model:
+        rows = bench(
+            model, sizes=sizes, batches=batches, questions=questions, image=image,  # type: ignore[arg-type]
+            runs=int(cfg["runs"]), warmup=int(cfg["warmup"]), max_time=float(cfg["max_time"]), progress=progress,
+        )  # fmt: skip
+    data = [r.to_dict() for r in rows]
+    if cfg["json"]:
+        print(json.dumps(data))
+    else:
+        print(table(rows))
+    if isinstance(cfg["save"], str):
+        path = Path(cfg["save"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        print(f"saved to {path}", file=sys.stderr)
+
+
 def run_serve(cfg: dict[str, Any]) -> None:
     model = load_model(cfg)
     print(f"serving {model.name} ({model.spec.runtime}) on http://{cfg['host']}:{cfg['port']}/v1/systemone")
@@ -420,6 +465,7 @@ MODES: dict[str, Callable[[dict[str, Any]], None]] = {
     "track": run_track,
     "calibrate": run_calibrate,
     "serve": run_serve,
+    "bench": run_bench,
     "models": run_models,
     "version": run_version,
     "help": run_help,

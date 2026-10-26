@@ -130,7 +130,7 @@ def decompress(body: bytes, encoding: str | None) -> bytes:
                 from compression.zstd import decompress as unzstd  # type: ignore[import-not-found]
             except ImportError:
                 try:
-                    from backports.zstd import decompress as unzstd  # type: ignore[import-not-found,no-redef]
+                    from backports.zstd import decompress as unzstd  # type: ignore[import-not-found,import-untyped,no-redef]
                 except ImportError:
                     raise RequestError(
                         415, "unsupported_media_type", "zstd bodies need Python 3.14+ or `pip install backports.zstd`"

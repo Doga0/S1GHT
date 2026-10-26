@@ -17,6 +17,7 @@ Exit codes: `0` success, `1` runtime error (missing file, unreachable server, ..
 | `track` | hybrid mode: detector + per-track decisions and events |
 | `calibrate` | fit a calibration profile and print its report |
 | `serve` | serve the model as `/v1/systemone` with images |
+| `bench` | measure latency by image size and batch size |
 | `models` | list the catalog |
 | `version`, `help` | |
 
@@ -74,6 +75,22 @@ Without `json=True`, `track` prints events as they start and end, then a summary
 **calibrate**: `data` (a manifest file, or a folder with `manifest.jsonl`), `folds` (`5`), `batch` (`4`), `save` (profile path; default `runs/calibrate/<model>-<runtime>.json`), `save_dir`. A reliability diagram is written next to the profile.
 
 **serve**: `host` (`127.0.0.1`), `port` (`11436`), `api_key` (none: no authentication).
+
+**bench**: for every image size and batch size, times `decide_batch` calls on fresh images and prints milliseconds per call (median, p90), milliseconds per image, images per second and peak memory (CUDA allocations on a GPU, resident memory on CPU with `psutil`).
+
+| Key | Default | |
+| --- | --- | --- |
+| `sizes` | `[128, 256, 384, 640]` | longer image side in px (4:3 images) |
+| `batches` | `[1, 4, 16]` | images per runtime call |
+| `questions` | one Noul | YAML/JSON file of questions asked about every image |
+| `source` | a synthetic scene | an image to resize instead |
+| `runs` | `5` | timed calls per (size, batch) |
+| `warmup` | `1` | untimed calls first |
+| `max_time` | `60.0` | seconds of timed calls per (size, batch); at least one call runs |
+| `save` | | write the rows as JSON |
+| `json` | `False` | print JSON instead of the table |
+
+`benchmarks/latency.py` runs the same measurement for several `model:runtime` targets and prints a Markdown table.
 
 ## Examples
 

@@ -59,6 +59,26 @@ Measured warm latency, one request (Tesla T4):
 
 Weights download into `$S1GHT_CACHE` (default `~/.cache/s1ght`).
 
+## Measuring speed
+
+`s1ght bench` times a model by image size and batch size on your hardware ([command line](cli.md)); `benchmarks/latency.py` does the same for several models and prints Markdown:
+
+```bash
+s1ght bench model=d1-omni-600m runtime=ollama sizes=[256,640] batches=[1,4]
+python benchmarks/latency.py d1-omni-600m:native d1-omni-600m:ollama
+```
+
+d1-omni-600M on a laptop CPU (Intel Core i7-13700H, 32 GB), one Noul per image, warm median ms per image:
+
+| Longer side | native fp32, batch 1 | native fp32, batch 4 | native fp32, batch 16 | Ollama Q8_0, batch 1 | Ollama Q8_0, batch 16 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 px | 2770 | 2461 | 2117 | 1290 | 1275 |
+| 256 px | 2477 | 2269 | 2438 | 1198 | 1251 |
+| 384 px | 2859 | 2356 | 2532 | 1726 | 1764 |
+| 640 px | 4105 | 3210 | 3703 | 3439 | 3637 |
+
+Peak memory: native 2.8 GB (process), Ollama client 0.5 GB (the model lives in Ollama's process). On CPU, Ollama's quantized GGUF is about twice as fast as native fp32 up to 384 px. Batching barely helps either path on a CPU: native batches are compute-bound, and the server client sends a batch's requests one after another (#14). Below 384 px the cost hardly changes with image size, so a smaller frame does not make d1-omni much faster on CPU; most of the time is the fixed cost of the vision encoder and decision trunk.
+
 ## Models outside the catalog
 
 ```python
