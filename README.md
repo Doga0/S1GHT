@@ -13,16 +13,22 @@ S1GHT asks decision models typed questions about images and video: *is this pers
 - **Calibration.** Fit temperatures on held-out examples and get ECE and Brier scores before and after.
 - **Serve it.** `s1ght serve` exposes any model as `/v1/systemone` with images, so TypeSafe clients connect with `TYPESAFE_BASE_URL`.
 
-> Status: P1 (hybrid mode and the shared core) is complete. Standalone detection with the decision model alone (`predict(queries=...)`) comes in P2. The package is not on PyPI yet.
+> Status: P1 (hybrid mode and the shared core) is complete. Standalone detection with the decision model alone (`predict(queries=...)`) comes in P2.
 
 ## Install
 
 Python 3.11 or newer.
 
 ```bash
+pip install "s1ght[native]"          # in-process models (torch, transformers)
+```
+
+From source, for the latest `main` or to develop:
+
+```bash
 git clone https://github.com/Doga0/S1GHT.git
 cd S1GHT
-pip install -e ".[native]"          # in-process models (torch, transformers)
+pip install -e ".[native]"
 ```
 
 | Extra | Adds | For |
@@ -122,7 +128,7 @@ for r in model.track("site.mp4", detector="yolo11n.pt", ask=ask, budget=4, strea
     frame = r.plot()
 ```
 
-Needs `pip install -e ".[ultralytics]"`. The detector runs at its own speed; the decision model answers crops in a background thread, at most `budget` decisions per second. See [docs/hybrid.md](docs/hybrid.md).
+Needs `pip install "s1ght[ultralytics]"`. The detector runs at its own speed; the decision model answers crops in a background thread, at most `budget` decisions per second. See [docs/hybrid.md](docs/hybrid.md).
 
 ```bash
 s1ght track model=d1-omni-600m source=0 ask=examples/ask.yaml show=True
@@ -196,6 +202,7 @@ Every key and default is in [docs/cli.md](docs/cli.md).
 - [Command line](docs/cli.md)
 - [Server](docs/server.md)
 - [Architecture and extending S1GHT](docs/architecture.md)
+- [Releasing](docs/releasing.md)
 - [Examples](examples/)
 
 ## Development

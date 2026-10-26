@@ -7,7 +7,13 @@ HEAVY = ("torch", "transformers", "ultralytics")
 
 
 def test_version() -> None:
-    assert s1ght.__version__ == "0.1.0.dev0"
+    # one source: pyproject reads __version__, so the installed metadata must agree with it
+    from importlib.metadata import version
+
+    from packaging.version import Version
+
+    assert str(Version(s1ght.__version__)) == s1ght.__version__
+    assert version("s1ght") == s1ght.__version__
 
 
 def test_import_is_light() -> None:

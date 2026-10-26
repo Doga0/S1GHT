@@ -1,0 +1,112 @@
+name: Release
+
+# Push a tag `vX.Y.Z` matching `__version__` in src/s1ght/__init__.py to publish to PyPI.
+# "Run workflow" (workflow_dispatch) builds, tests and publishes to TestPyPI instead.
+# Publishing uses PyPI trusted publishing (OIDC): no token is stored; see docs/releasing.md.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install build twine
+      - run: python -m build
+      - name: check the distributions
+        run: python scripts/check_dist.py dist/ ${{ startsWith(github.ref, 'refs/tags/') && format('--tag {0}', github.ref_name) || '' }}
+      - run: twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  test-wheel:
+    # the offline suite against the built wheel, not the source tree
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: pip install "$(ls dist/*.whl)[serve]" pytest typesafe-sdk
+      - name: import s1ght without torch
+        run: python -c "import importlib.util as u, s1ght; assert u.find_spec('torch') is None; print(s1ght.__version__)"
+      - run: s1ght models
+      - name: tests use the installed wheel
+        run: |
+          mv src src.unused
+          python -m pytest -p no:cacheprovider tests
+
+  publish-testpypi:
+    if: github.event_name == 'workflow_dispatch'
+    needs: test-wheel
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/s1ght
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test-wheel
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/s1ght
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {on=1; next} on && /^## \[/ {exit} on' CHANGELOG.md > notes.md
+          test -s notes.md || echo "See CHANGELOG.md" > notes.md
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "S1GHT $GITHUB_REF_NAME" --notes-file notes.md
