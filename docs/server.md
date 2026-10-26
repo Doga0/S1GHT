@@ -3,7 +3,7 @@
 `s1ght serve` puts any S1GHT model behind TypeSafe's `/v1/systemone` API, with images. Existing TypeSafe code then runs on a local model by changing one environment variable.
 
 ```bash
-pip install "s1ght[serve]"
+pip install "s1ght-visual-decisions[serve]"
 s1ght serve model=d1-omni-600m port=11436
 ```
 

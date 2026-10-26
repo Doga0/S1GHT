@@ -1,6 +1,6 @@
 """The official TypeSafe SDK, unchanged, answered by a local model through `s1ght serve`.
 
-pip install "s1ght[serve]" typesafe-sdk
+pip install "s1ght-visual-decisions[serve]" typesafe-sdk
 s1ght serve model=d1-omni-600m port=11436          # in another terminal
 python examples/typesafe_client.py bus.jpg
 """

@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27", "hatch-fancy-pypi-readme>=24.1"]
 build-backend = "hatchling.build"
 
 [project]
-name = "s1ght"
+name = "s1ght-visual-decisions"   # the PyPI name; the import name and the command stay `s1ght`
 dynamic = ["version", "readme"]   # version: src/s1ght/__init__.py; readme: README.md with absolute links
 description = "S1GHT — Real-Time Visual Decisions: detection and state questions with decision models"
 requires-python = ">=3.11"
@@ -33,7 +33,7 @@ native = ["torch>=2.4", "torchvision", "transformers>=5.14", "accelerate"]   # d
 ultralytics = ["ultralytics>=8.4", "lap>=0.5.12"]             # AGPL-3.0; lap: ByteTrack (else auto-installed at run time)
 serve = ["fastapi>=0.115", "uvicorn>=0.30", "python-multipart>=0.0.18"]
 dev = ["pytest", "pytest-cov", "ruff", "mypy", "types-PyYAML", "typesafe-sdk"]   # typesafe-sdk: `serve` compatibility test
-all = ["s1ght[native,ultralytics,serve]"]
+all = ["s1ght-visual-decisions[native,ultralytics,serve]"]
 
 [project.scripts]
 s1ght = "s1ght.cli:main"

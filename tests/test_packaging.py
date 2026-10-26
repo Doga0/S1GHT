@@ -22,19 +22,28 @@ V = s1ght.__version__
 README = "See [docs](https://github.com/Doga0/S1GHT/blob/main/docs/README.md)."
 
 
-def make_dist(tmp: Path, *, wheel_files=None, sdist_files=None, readme: str = README, version: str = V) -> Path:
+def make_dist(
+    tmp: Path,
+    *,
+    wheel_files=None,
+    sdist_files=None,
+    readme: str = README,
+    version: str = V,
+    name: str = check_dist.NAME,
+) -> Path:
     dist = tmp / "dist"
     dist.mkdir()
-    meta = f"Metadata-Version: 2.4\nName: s1ght\nVersion: {version}\n\n{readme}"
+    file = check_dist.FILE
+    meta = f"Metadata-Version: 2.4\nName: {name}\nVersion: {version}\n\n{readme}"
     files = wheel_files if wheel_files is not None else list(check_dist.WHEEL_NEEDS)
-    with zipfile.ZipFile(dist / f"s1ght-{version}-py3-none-any.whl", "w") as z:
+    with zipfile.ZipFile(dist / f"{file}-{version}-py3-none-any.whl", "w") as z:
         for f in files:
             z.writestr(f, "")
-        z.writestr(f"s1ght-{version}.dist-info/METADATA", meta)
-    with tarfile.open(dist / f"s1ght-{version}.tar.gz", "w:gz") as t:
+        z.writestr(f"{file}-{version}.dist-info/METADATA", meta)
+    with tarfile.open(dist / f"{file}-{version}.tar.gz", "w:gz") as t:
         for f in sdist_files if sdist_files is not None else ["src/s1ght/__init__.py", "tests/conftest.py"]:
             data = b""
-            info = tarfile.TarInfo(f"s1ght-{version}/{f}")
+            info = tarfile.TarInfo(f"{file}-{version}/{f}")
             info.size = len(data)
             t.addfile(info, io.BytesIO(data))
     return dist
@@ -53,6 +62,7 @@ def test_good_dist(tmp_path: Path) -> None:
         ({"sdist_files": ["src/s1ght/__init__.py", "tests/conftest.py", "design.md"]}, "design.md"),
         ({"sdist_files": ["src/s1ght/__init__.py"]}, "missing the tests"),
         ({"version": "9.9.9"}, "is not version"),
+        ({"name": "s1ght"}, "trusted publisher"),  # PyPI refuses an upload whose name differs from the publisher's
     ],
 )
 def test_bad_dist(tmp_path: Path, kwargs: dict, message: str) -> None:

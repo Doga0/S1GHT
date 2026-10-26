@@ -13,7 +13,8 @@ def test_version() -> None:
     from packaging.version import Version
 
     assert str(Version(s1ght.__version__)) == s1ght.__version__
-    assert version("s1ght") == s1ght.__version__
+    # the PyPI name differs from the import name: `pip install s1ght-visual-decisions`, `import s1ght`
+    assert version("s1ght-visual-decisions") == s1ght.__version__
 
 
 def test_import_is_light() -> None:

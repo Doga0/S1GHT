@@ -20,8 +20,10 @@ S1GHT asks decision models typed questions about images and video: *is this pers
 Python 3.11 or newer.
 
 ```bash
-pip install "s1ght[native]"          # in-process models (torch, transformers)
+pip install "s1ght-visual-decisions[native]"          # in-process models (torch, transformers)
 ```
+
+On PyPI the package is `s1ght-visual-decisions`. In code it is still `import s1ght`, and on the command line `s1ght`.
 
 From source, for the latest `main` or to develop:
 
@@ -128,7 +130,7 @@ for r in model.track("site.mp4", detector="yolo11n.pt", ask=ask, budget=4, strea
     frame = r.plot()
 ```
 
-Needs `pip install "s1ght[ultralytics]"`. The detector runs at its own speed; the decision model answers crops in a background thread, at most `budget` decisions per second. See [docs/hybrid.md](docs/hybrid.md).
+Needs `pip install "s1ght-visual-decisions[ultralytics]"`. The detector runs at its own speed; the decision model answers crops in a background thread, at most `budget` decisions per second. See [docs/hybrid.md](docs/hybrid.md).
 
 ```bash
 s1ght track model=d1-omni-600m source=0 ask=examples/ask.yaml show=True

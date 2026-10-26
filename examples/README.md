@@ -14,7 +14,7 @@
 
 Every script takes `--model` and `--runtime`. The default model is `d1-omni-600m`:
 
-- **native** (default): `pip install "s1ght[native]"`; downloads 2.4 GB once, runs on GPU or CPU.
+- **native** (default): `pip install "s1ght-visual-decisions[native]"`; downloads 2.4 GB once, runs on GPU or CPU.
 - **Ollama**: `ollama pull hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0` (0.8 GB), then add `--runtime ollama`. No torch needed.
 
 The same files work from the command line:
