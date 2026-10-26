@@ -83,7 +83,6 @@ Register it in `s1ght/runtimes/native/families/__init__.py` and in `FAMILIES` in
 my-model:
   source: hf://org/repo@<40-char commit>
   family: qwen_vl
-  modalities: [text, image]
   runtimes:
     native: {dtype: {cuda: bf16, t4: fp16, cpu: fp32}}
     vllm: {model: org/repo}

@@ -3,14 +3,14 @@
 | File | Shows | Needs |
 | --- | --- | --- |
 | [decide_image.py](decide_image.py) | one decision about one image: Noul, Choice, Score | a model (native or `--runtime ollama`) |
-| [decide_text.py](decide_text.py) | text and JSON states, questions from [ticket.yaml](ticket.yaml) | a model |
+| [decide_crops.py](decide_crops.py) | the same questions about several objects in one photo, one crop each, with questions from [inspection.yaml](inspection.yaml) | a model |
 | [predict_folder.py](predict_folder.py) | full-frame questions over a folder, video or camera; annotated frames saved | a model |
 | [track_video.py](track_video.py) | hybrid mode: YOLO tracks, per-track questions from [ask.yaml](ask.yaml), events | a model and `.[ultralytics]` |
 | [typesafe_client.py](typesafe_client.py) | the official TypeSafe SDK against `s1ght serve` | `.[serve]`, `typesafe-sdk`, a running `s1ght serve` |
 | [custom_runtime.py](custom_runtime.py) | plugging your own back end into S1GHT | nothing: runs offline |
 | [questions.yaml](questions.yaml) | full-frame questions for `decide` / `predict` | |
 | [ask.yaml](ask.yaml) | per-class questions for `track` | |
-| [ticket.yaml](ticket.yaml) | text-only questions | |
+| [inspection.yaml](inspection.yaml) | questions about the object in the center of a crop | |
 
 Every script takes `--model` and `--runtime`. The default model is `d1-omni-600m`:
 

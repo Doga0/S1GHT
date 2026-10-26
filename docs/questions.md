@@ -13,11 +13,12 @@ r.usage  # {"input_tokens": ..., "output_tokens": 0}
 
 ## State
 
-The state can be:
+S1GHT is for visual decisions, so the state holds one or more images:
 
-- **Text**: `"I was charged twice this month."`
-- **JSON**: dicts and lists, nested to any depth: `{"ticket": {"subject": ..., "body": ...}}`
-- **Images**: `Image` objects anywhere a value can go: `{"photo": Image("bus.jpg")}`, `[Image(a), Image(b)]`.
+- **Images**: `Image` objects anywhere a value can go: `{"photo": Image("bus.jpg")}`, `{"before": Image(a), "after": Image(b)}`.
+- **Context** (optional): text or JSON next to the images that helps the question, such as a camera name, a zone or the time: `{"photo": Image("gate.jpg"), "camera": "gate 3", "zone": "forklifts only"}`.
+
+The schema itself also accepts states without images, but S1GHT's examples, defaults and calibration are built for images.
 
 Questions refer to parts of the state by name, conventionally in backticks: ``"Is there a bus in `photo`?"``. In `predict()` and `track()` the frame or crop is always the key `image` (plus `frame` with `track(context="crop+frame")`), so questions there say `` `image` ``.
 
@@ -38,7 +39,10 @@ Answer: `NoulAnswer(noul=0.97)`, the probability of yes. `answer.confidence` is 
 
 ```python
 Choice("What is the person doing?", ["standing", "bending", "on a ladder", "other"])
-Choice("Which team?", {"billing": "charges and refunds", "technical": "faults", "fraud": "unauthorised use"})
+Choice(
+    "Which vehicle is in `photo`?",
+    {"forklift": None, "truck": "a road truck or lorry", "van": None, "none": "no vehicle"},
+)
 ```
 
 2 to 255 options (26 for option-letter models such as Qwen3-VL, see [models](models.md)). Descriptions are optional; use `None` for an undescribed option.

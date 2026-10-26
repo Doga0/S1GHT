@@ -1,0 +1,12 @@
+# Questions about one object per crop: the crop is `image`, the object is in its center.
+bag:
+  type: noul
+  instructions: "Is the person in the center of `image` carrying a bag or backpack?"
+posture:
+  type: choice
+  instructions: "What is the person in the center of `image` doing?"
+  criteria: {standing: null, walking: null, sitting: null, bending: null}
+visible:
+  type: score
+  instructions: "How much of the person in the center of `image` is visible?"
+  criteria: ["only the head", "the upper body", "most of the body", "the whole body"]

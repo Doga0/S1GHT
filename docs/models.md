@@ -6,11 +6,13 @@ A **model** is a set of weights; a **runtime** is what runs them. The same model
 
 `s1ght models` prints the packaged catalog (`src/s1ght/registry.yaml`):
 
-| Name | Weights | Runtimes (first is the default) | Inputs | Read through | License |
-| --- | --- | --- | --- | --- | --- |
-| `d1-3b` | LiquidAI/d1-3B | native, ollaya, llama_cpp | text, image | the model's own `system_one` engine | LFM Open License 1.0 |
-| `d1-omni-600m` | LiquidAI/d1-omni-600M | native, ollama, llama_cpp | text, image, audio | the model's own `system_one` engine | LFM Open License 1.0 |
-| `qwen3-vl-4b` | Qwen/Qwen3-VL-4B-Instruct | native, vllm, llama_server | text, image | option-letter logits | Apache-2.0 |
+| Name | Weights | Runtimes (first is the default) | Read through | License |
+| --- | --- | --- | --- | --- |
+| `d1-3b` | LiquidAI/d1-3B | native, ollaya, llama_cpp | the model's own `system_one` engine | LFM Open License 1.0 |
+| `d1-omni-600m` | LiquidAI/d1-omni-600M | native, ollama, llama_cpp | the model's own `system_one` engine | LFM Open License 1.0 |
+| `qwen3-vl-4b` | Qwen/Qwen3-VL-4B-Instruct | native, vllm, llama_server | option-letter logits | Apache-2.0 |
+
+S1GHT uses every model for visual decisions: images, with optional text context next to them. Other inputs some checkpoints accept (d1-omni-600M also reads audio) are outside S1GHT's scope.
 
 Every source is pinned to a Hugging Face commit, which fixes the content of every file (including any `trust_remote_code` code). The LFM Open License 1.0 does not cover commercial use by organizations with more than US$10M annual revenue. `llama_cpp` (running GGUF files in-process) is listed but not implemented yet.
 

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from conftest import FakeRuntime
-from s1ght import S1GHT, cli
+from s1ght import S1GHT, Image, cli
 from s1ght.schema.questions import load_questions
 from s1ght.schema.systemone import SystemOneRequest
 from test_scheduler import FakeDetector
@@ -79,17 +79,21 @@ def test_decide_image(fake, files, capsys) -> None:
     assert out["model"] == "fake" and out["answers"]["bus"]["type"] == "noul"
 
 
-def test_decide_text_json_state(fake, files, capsys) -> None:
-    assert cli.main(["decide", 'state={"note": "a red bus"}', f"questions={files / 'q.yaml'}"]) == 0
+def test_decide_json_context_next_to_the_image(fake, files, capsys) -> None:
+    img = files / "img1.jpg"
+    args = ["decide", f"source={img}", 'state={"camera": "gate 3"}', f"questions={files / 'q.yaml'}"]
+    assert cli.main(args) == 0
     questions = load_questions(files / "q.yaml")
-    direct = FakeRuntime(model="fake").decide(SystemOneRequest("x", {"note": "a red bus"}, questions))  # type: ignore[arg-type]
+    state = {"image": Image(str(img)), "context": {"camera": "gate 3"}}
+    direct = FakeRuntime(model="fake").decide(SystemOneRequest("x", state, questions))  # type: ignore[arg-type]
     assert json.loads(capsys.readouterr().out)["answers"]["bus"]["noul"] == pytest.approx(direct.answers["bus"].noul)
 
 
-def test_decide_needs_input(fake, files, capsys) -> None:
+def test_decide_needs_an_image(fake, files, capsys) -> None:
     assert cli.main(["decide", f"questions={files / 'q.yaml'}"]) == 2
     assert "source=" in capsys.readouterr().err
-    assert cli.main(["decide", "state=x", f"questions={files / 'ask.yaml'}"]) == 2
+    assert cli.main(["decide", "state=a red bus", f"questions={files / 'q.yaml'}"]) == 2  # text alone is not enough
+    assert cli.main(["decide", f"source={files / 'img0.jpg'}", f"questions={files / 'ask.yaml'}"]) == 2
 
 
 def test_predict_saves_and_prints(fake, files, capsys) -> None:
