@@ -19,6 +19,7 @@ The two modes differ only in the "where" layer. Questions, runtimes, calibration
 | `s1ght/runtimes/base.py` | the `Runtime` protocol, `Capabilities`, `RawScores`, logits → answers |
 | `s1ght/runtimes/native/` | `NativeRuntime` and model families (`lfm2_vl`, `d1_omni`, `qwen_vl`, `semif_generic`) |
 | `s1ght/runtimes/letters.py` | the option-letter prompt and readout shared by letter families and logprob servers |
+| `s1ght/runtimes/native/prefix.py` | the prefix KV cache for letter families: images encoded once per request |
 | `s1ght/runtimes/server/` | `/v1/systemone` client (TypeSafe, Ollama, Ollaya) and logprob client (vLLM, llama-server) |
 | `s1ght/engine/` | crops, scheduler, fusion, calibration |
 | `s1ght/detectors/` | the `Detector` protocol and the Ultralytics adapter |
@@ -71,7 +72,7 @@ class MyFamily:
     def close(self) -> None: ...
 ```
 
-Register it in `s1ght/runtimes/native/families/__init__.py` and in `FAMILIES` in `hub.py`, and give catalog entries `family: my_family`. Chat VLMs usually need no new family: subclass `SemifGenericFamily` and set `template_kwargs`, as `QwenVlFamily` does.
+Register it in `s1ght/runtimes/native/families/__init__.py` and in `FAMILIES` in `hub.py`, and give catalog entries `family: my_family`. Chat VLMs usually need no new family: subclass `SemifGenericFamily` and set `template_kwargs`, as `QwenVlFamily` does. To reuse the encoded images across questions, also set `prefix_layout = PrefixLayout(end_token, mrope=...)`: the special token that closes an image block, and whether positions are Qwen's multimodal RoPE. Check it against the plain path with a tiny random model, as `tests/test_prefix_cache.py` does.
 
 ## Writing a detector
 

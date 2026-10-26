@@ -8,7 +8,7 @@ Two kinds of family exist. `SystemOneFamily` wraps models that ship their own on
 decision engine (`system_one_batch`): d1 reads the state and images once and branches the
 questions off that shared trunk. `semif_generic` and `qwen_vl` read general chat VLMs
 through option letters (`s1ght.runtimes.letters`). A family may set `caps` when it differs
-from the native default (letter families allow 26 options and no prefix cache). Hooks for
+from the native default (letter families allow 26 options; their prefix cache depends on the family). Hooks for
 `hidden_states` and `attention` come with the P2 localizers.
 """
 

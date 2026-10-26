@@ -4,6 +4,10 @@ All notable changes to S1GHT. Versions follow [semantic versioning](https://semv
 
 ## [Unreleased]
 
+### Added
+
+- **Prefix cache for option-letter families** (`runtimes/native/prefix.py`): a request's images are encoded once and its questions, and their extra option orders, branch off that KV cache. On by default for `qwen_vl`; `prefix_cache=False` turns it off. Other families opt in with a `PrefixLayout`.
+
 ## [0.1.0] - 2026-10-26
 
 The first release: the shared core and hybrid mode (P1).

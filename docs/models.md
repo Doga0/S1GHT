@@ -55,7 +55,7 @@ Measured warm latency, one request (Tesla T4):
 | --- | --- | --- |
 | d1-omni-600m | fp16 | 58 ms (fp32: 127 ms) |
 | d1-3b | fp16 | 143 ms (fp32: 471 ms) |
-| qwen3-vl-4b | fp16 | 2.7–3.9 s for three questions about one photo (no prefix cache yet); vLLM 1.4–2.7 s |
+| qwen3-vl-4b | fp16 | 2.7–3.9 s for three questions about one photo, measured before the prefix cache; vLLM 1.4–2.7 s |
 
 Weights download into `$S1GHT_CACHE` (default `~/.cache/s1ght`).
 
@@ -108,6 +108,8 @@ The family is guessed from `config.json`: Qwen2/2.5/3-VL → `qwen_vl`, LFM2-VL 
 
 General chat VLMs have no decision head. S1GHT turns each question into a multiple-choice prompt (the state, the images, and the options lettered A, B, C, ...) and reads the next-token probabilities of the letters. Nothing is generated, so one question costs one forward pass. Thinking is turned off for Qwen3.
 
+On the native `qwen_vl` path, a request's system message and images are encoded once, and every question (and every extra option order) runs only its own text on a copy of that KV cache. The answers are the same as reading each prompt in full. vLLM and llama-server do the same on their side with their own prefix caching.
+
 Letter models prefer "A" (about +2.4 nat on Qwen3-VL-4B). When a reading is close (top-two gap under 6 nat), S1GHT asks again with the options in other orders and averages: every cyclic rotation for up to 4 options, which cancels a per-letter bias exactly, else the reversed order.
 
 ```python
@@ -121,6 +123,7 @@ S1GHT("qwen3-vl-4b", margin=4.0, batch=8, max_side=768)
 | `margin` | `6.0` | gap in nat under which `"auto"` asks again |
 | `batch` | `4` | prompts per forward pass (native) |
 | `max_side` | `1024` | longer image side in pixels |
+| `prefix_cache` | `True` | encode a request's images once and branch its questions off them (native `qwen_vl`) |
 | `concurrency` | `4` | requests in flight (vLLM, llama-server) |
 
 S1GHT resizes images itself (sides multiples of 32 px) before any runtime sees them, so native and server paths read the same pixels and agree: on a T4, native fp16 and vLLM gave the same answers to every question; on a CPU, native fp32 and llama-server (Q8_0) did too, with matching prompt token counts.
