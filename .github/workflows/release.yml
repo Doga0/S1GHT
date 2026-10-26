@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/s1ght
+      url: https://test.pypi.org/p/s1ght-visual-decisions
     permissions:
       id-token: write
     steps:
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/s1ght
+      url: https://pypi.org/p/s1ght-visual-decisions
     permissions:
       id-token: write
     steps:

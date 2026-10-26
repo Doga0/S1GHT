@@ -173,5 +173,7 @@ def _require_torch() -> Any:
         import torch
         import transformers  # noqa: F401
     except ImportError as e:
-        raise ImportError("the native runtime needs torch and transformers: pip install 's1ght[native]'") from e
+        raise ImportError(
+            "the native runtime needs torch and transformers: pip install 's1ght-visual-decisions[native]'"
+        ) from e
     return torch

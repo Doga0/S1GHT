@@ -4,7 +4,7 @@ The adapter reads the generator's `Results` and converts them to numpy `Frame`s.
 subclass the predictor or register callbacks: `track()` appends its tracker callbacks on every
 call, so a user callback registered earlier would run before tracking and never see track ids.
 
-Ultralytics is AGPL-3.0 and an optional extra (`pip install 's1ght[ultralytics]'`); it is
+Ultralytics is AGPL-3.0 and an optional extra (`pip install 's1ght-visual-decisions[ultralytics]'`); it is
 imported only when a detector is built. YOLO handles closed classes; YOLOE (open vocabulary via
 `set_classes`) and other Ultralytics models load the same way.
 """
@@ -25,7 +25,9 @@ def _require_ultralytics() -> Any:
     try:
         import ultralytics
     except ImportError as e:
-        raise ImportError("the Ultralytics detector needs: pip install 's1ght[ultralytics]' (AGPL-3.0)") from e
+        raise ImportError(
+            "the Ultralytics detector needs: pip install 's1ght-visual-decisions[ultralytics]' (AGPL-3.0)"
+        ) from e
     return ultralytics
 
 

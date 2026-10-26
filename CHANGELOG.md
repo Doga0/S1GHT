@@ -27,4 +27,4 @@ The first release: the shared core and hybrid mode (P1).
 - **`s1ght bench`:** latency by image size and batch size (`benchmarks/latency.py` for several models at once), with measured CPU and GPU (T4, A100, RTX PRO 6000) tables in `docs/models.md`.
 - **`s1ght serve`:** any model as `/v1/systemone` with images. The official TypeSafe SDK connects with `TYPESAFE_BASE_URL`.
 - **Documentation and runnable examples**, all visual: images with optional text context. Text-only and audio use are out of scope.
-- **Releases:** the version lives only in `s1ght.__version__`, and a `v*` tag publishes to PyPI after the wheel's tests pass.
+- **Releases:** the package is published on PyPI as `s1ght-visual-decisions` (`pip install s1ght-visual-decisions`; it still imports as `s1ght`). The version lives only in `s1ght.__version__`, and a `v*` tag publishes after the wheel's tests pass.

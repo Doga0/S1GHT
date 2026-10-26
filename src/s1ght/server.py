@@ -199,7 +199,7 @@ class Server:
 
 
 def create_app(model: "S1GHT", *, api_key: str | None = None) -> "FastAPI":
-    """A FastAPI app serving `model` (needs the `serve` extra: `pip install s1ght[serve]`).
+    """A FastAPI app serving `model` (needs the `serve` extra: `pip install s1ght-visual-decisions[serve]`).
 
     Args:
         model: The loaded model; every request is answered by it.
@@ -212,7 +212,7 @@ def create_app(model: "S1GHT", *, api_key: str | None = None) -> "FastAPI":
         from starlette.datastructures import UploadFile
         from starlette.formparsers import MultiPartException, MultiPartParser
     except ImportError as e:
-        raise ImportError("s1ght serve needs FastAPI: pip install 's1ght[serve]'") from e
+        raise ImportError("s1ght serve needs FastAPI: pip install 's1ght-visual-decisions[serve]'") from e
 
     server = Server(model, api_key=api_key)
     started = datetime.date.today().isoformat()

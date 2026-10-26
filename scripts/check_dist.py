@@ -23,6 +23,8 @@ from pathlib import Path
 
 WHEEL_NEEDS = ("s1ght/__init__.py", "s1ght/registry.yaml", "s1ght/cfg/default.yaml", "s1ght/py.typed", "s1ght/cli.py")
 NEVER = ("design.md", "handoff.md", ".ipynb", "/.github/", ".venv")
+NAME = "s1ght-visual-decisions"  # the PyPI project name; the package imports as `s1ght`
+FILE = NAME.replace("-", "_")  # how wheels and sdists spell it in file names
 
 
 def version_from_init(root: Path) -> str:
@@ -44,13 +46,13 @@ def check(dist: Path, tag: str | None, version: str | None = None) -> list[str]:
         if not re.search(rf"^## \[{re.escape(version)}\] - \d{{4}}-\d{{2}}-\d{{2}}\s*$", changelog, re.MULTILINE):
             errors.append(f"CHANGELOG.md has no dated section '## [{version}] - YYYY-MM-DD'")
 
-    wheels = sorted(dist.glob("s1ght-*.whl"))
-    sdists = sorted(dist.glob("s1ght-*.tar.gz"))
+    wheels = sorted(dist.glob(f"{FILE}-*.whl"))
+    sdists = sorted(dist.glob(f"{FILE}-*.tar.gz"))
     if len(wheels) != 1 or len(sdists) != 1:
         return [*errors, f"expected one wheel and one sdist in {dist}, found {len(wheels)} and {len(sdists)}"]
     wheel, sdist = wheels[0], sdists[0]
     for f in (wheel, sdist):
-        if f"s1ght-{version}" not in f.name:
+        if not f.name.startswith(f"{FILE}-{version}-") and f.name != f"{FILE}-{version}.tar.gz":
             errors.append(f"{f.name} is not version {version}")
 
     with zipfile.ZipFile(wheel) as z:
@@ -60,9 +62,11 @@ def check(dist: Path, tag: str | None, version: str | None = None) -> list[str]:
     for need in WHEEL_NEEDS:
         if need not in names:
             errors.append(f"wheel is missing {need}")
-    outside = [n for n in names if not n.startswith(("s1ght/", f"s1ght-{version}.dist-info/"))]
+    outside = [n for n in names if not n.startswith(("s1ght/", f"{FILE}-{version}.dist-info/"))]
     if outside:
         errors.append(f"wheel has files outside the package: {outside[:5]}")
+    if meta["Name"] != NAME:
+        errors.append(f"wheel metadata name {meta['Name']} != {NAME} (the PyPI trusted publisher is set up for {NAME})")
     if meta["Version"] != version:
         errors.append(f"wheel metadata version {meta['Version']} != {version}")
     readme = meta.get_payload()

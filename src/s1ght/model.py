@@ -394,7 +394,7 @@ class S1GHT:
         try:
             import uvicorn
         except ImportError as e:
-            raise ImportError("serve() needs uvicorn: pip install 's1ght[serve]'") from e
+            raise ImportError("serve() needs uvicorn: pip install 's1ght-visual-decisions[serve]'") from e
         uvicorn.run(create_app(self, api_key=api_key), host=host, port=port, log_level=log_level)
 
     def close(self) -> None:

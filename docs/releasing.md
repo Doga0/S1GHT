@@ -1,12 +1,12 @@
 # Releasing
 
-Releases go to [PyPI](https://pypi.org/p/s1ght) from GitHub Actions (`.github/workflows/release.yml`). Pushing a version tag starts them; no token is stored anywhere.
+Releases go to [PyPI](https://pypi.org/p/s1ght-visual-decisions) from GitHub Actions (`.github/workflows/release.yml`). Pushing a version tag starts them; no token is stored anywhere.
 
 ## One-time setup
 
 PyPI and TestPyPI publish through **trusted publishing**: the workflow proves its identity with a short-lived OIDC token.
 
-1. On [pypi.org](https://pypi.org/manage/account/publishing/), add a **pending publisher** for the project `s1ght`:
+1. On [pypi.org](https://pypi.org/manage/account/publishing/), add a **pending publisher** for the project `s1ght-visual-decisions`. This must be the `name` in `pyproject.toml`; the import name `s1ght` is different and does not matter here. If the names differ, PyPI answers "Non-user identities cannot create new projects".
    - owner `Doga0`
    - repository `S1GHT`
    - workflow `release.yml`

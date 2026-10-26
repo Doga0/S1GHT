@@ -1,6 +1,6 @@
 """Hybrid mode: YOLO tracks people and cars, the decision model answers per track, events print as they happen.
 
-Needs the ultralytics extra: pip install "s1ght[ultralytics]"
+Needs the ultralytics extra: pip install "s1ght-visual-decisions[ultralytics]"
 
     python examples/track_video.py 0 --show                 # webcam
     python examples/track_video.py site.mp4 --save site_out.mp4 --budget 4
