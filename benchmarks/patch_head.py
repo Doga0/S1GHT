@@ -1,7 +1,8 @@
-"""P2.1-P2.2: does a small trained head turn a frozen decision model into a detector? (COCO mAP)
+"""P2.1-P2.3: does a small trained head turn a frozen decision model into a detector? (COCO mAP)
 
     python benchmarks/patch_head.py --device cuda --reference yolo26n.pt --out head.json
     python benchmarks/patch_head.py --train-sizes 2000 4000 8000 --queries text image
+    python benchmarks/patch_head.py --queries image --heads s32 s16 s16q --train-sizes 4000 8000
 
 P2.0 (`patch_signal.py`) showed that a frozen Qwen3-VL-4B knows *whether* an object is there
 (presence AUC 0.99) but that location does not fall out of training-free readouts or linear
@@ -22,11 +23,24 @@ why, in one run:
 - **Data scaling (`--train-sizes`):** heads trained on 2k, 4k, 8k ... images (nested random
   subsets of one sample), to see whether mAP grows with data or plateaus.
 
+P2.2 found classification solved by the decision-token query (unseen classes 0.223 vs seen 0.213)
+and the gap to YOLO in localization, worst for small objects (0.012 vs 0.168). P2.3 targets it:
+
+- **Stride 16 (`--heads s16`):** the vision encoder's patch states before its 2x2 merge (16 px
+  patches, captured at the merger's input, reordered from merge blocks to raster order) are added
+  to the decision model's 32 px states, upsampled 2x; the head scores and boxes every 16 px cell.
+- **IoU quality (`s16q`):** a branch predicts each box's IoU with its target; detections are
+  ranked by class score x predicted IoU, so well-placed boxes come first (mAP at high IoU).
+- **Features on the GPU (`--features-on`):** with enough GPU memory the cached features are
+  loaded there once, so training does not reread tens of GB from disk every epoch.
+
 The rest is P2.1:
 - **Features:** the decision prompt comes after the image and attention is causal, so patch
   states do not depend on the question. States of `--layers` are concatenated and cached on
   disk (float16 memmap).
-- **Head:** LayerNorm + linear, 2D position, a 2-layer transformer over the patches; class score
+- **Head:** LayerNorm + linear, 2D position, two 3x3 convolutions on the cell grid (added in
+  P2.3: box extents come from neighbouring cells, and attention alone overfit at stride 16), a
+  2-layer transformer over the patches; class score
   = scaled cosine(patch, query) + bias (OWL-ViT style); a class-agnostic box per patch as
   distances to the four sides (FCOS style). Focal loss for scores, GIoU + L1 for boxes. A patch
   is positive for a class when its center lies in a box of that class; the patch holding a box's
@@ -68,6 +82,7 @@ from s1ght.runtimes import letters
 
 COCO_URL = "http://images.cocodataset.org"
 STRIDE = 32  # Qwen3-VL: 16 px patches merged 2x2
+FINE = STRIDE // 2  # the vision encoder's patches, before the merge
 IOUS = np.linspace(0.5, 0.95, 10)
 AREAS = {"small": (0.0, 32.0**2), "medium": (32.0**2, 96.0**2), "large": (96.0**2, float("inf"))}
 
@@ -155,7 +170,9 @@ def fitted(item: Item, max_side: int) -> tuple[PILImage.Image, np.ndarray]:
 class Extractor:
     """Patch states, query states (text-only or decision token) and presence from a `qwen_vl` model."""
 
-    def __init__(self, path: str, device: str, dtype: str, layers: list[int], chunk: int, max_side: int) -> None:
+    def __init__(
+        self, path: str, device: str, dtype: str, layers: list[int], chunk: int, max_side: int, fine: bool = False
+    ) -> None:
         from s1ght.runtimes.native.families.qwen_vl import QwenVlFamily
 
         self.family = QwenVlFamily(flip="never", batch=chunk, max_side=max_side)
@@ -164,6 +181,14 @@ class Extractor:
         self.device, self.layers, self.chunk = device, layers, chunk
         self.image_token = self.model.config.image_token_id
         self.dim = int(self.model.config.text_config.hidden_size) * len(layers)
+        self.fine_dim = int(self.model.config.vision_config.hidden_size) if fine else 0
+        self._merger_input: Any = None
+        if fine:  # the vision encoder's 16 px patch states enter the 2x2 merger
+
+            def keep(_: Any, args: tuple) -> None:
+                self._merger_input = args[0]
+
+            self.model.model.visual.merger.register_forward_pre_hook(keep)
 
     def text(self, prompt: letters.Prompt) -> str:
         return str(
@@ -212,9 +237,10 @@ class Extractor:
 
     def decide(
         self, image: PILImage.Image, classes: list[int], names: list[str]
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
         """S1GHT's Noul prompt per class, with the image: patch states (P, dim) float16, the
-        decision token's states (C, dim) float16 and the model's answer P(yes) (C,)."""
+        decision token's states (C, dim) float16, the model's answer P(yes) (C,), and with `fine`
+        the vision encoder's 16 px patch states in raster order (4P, fine_dim) float16."""
         import torch
 
         state = {"image": "[image 1]"}
@@ -223,7 +249,7 @@ class Extractor:
             for c in classes
         ]
         yes, no = self.family.letter_ids["A"], self.family.letter_ids["B"]
-        patches, states, presence = None, [], []
+        patches, fine, states, presence = None, None, [], []
         for start in range(0, len(texts), self.chunk):
             batch = texts[start : start + self.chunk]
             inputs = self.processor(text=batch, images=[image] * len(batch), padding=True, return_tensors="pt")
@@ -238,16 +264,29 @@ class Extractor:
                     raise RuntimeError(f"{len(where)} image tokens, expected {expected} for {image.size}")
                 rows = torch.cat([hs[layer][0, where] for layer in self.layers], -1)
                 patches = rows.to(torch.float16).cpu().numpy()
+                if self.fine_dim:
+                    grid = (image.size[1] // FINE, image.size[0] // FINE)
+                    first = self._merger_input[: grid[0] * grid[1]]  # the batch holds copies of one image
+                    fine = merge_to_raster(first.to(torch.float16).cpu().numpy(), grid)
             last = torch.cat([hs[layer][:, -1] for layer in self.layers], -1)
             states.append(last.to(torch.float16).cpu().numpy())
             logits = out.logits[:, -1].float()
             margin = torch.logsumexp(logits[:, yes], -1) - torch.logsumexp(logits[:, no], -1)
             presence.append(torch.sigmoid(margin).cpu().numpy())
         assert patches is not None
-        return patches, np.concatenate(states), np.concatenate(presence)
+        return patches, np.concatenate(states), np.concatenate(presence), fine
 
     def close(self) -> None:
         self.family.close()
+
+
+def merge_to_raster(rows: np.ndarray, grid: tuple[int, int]) -> np.ndarray:
+    """Vision-encoder patch states from Qwen-VL's 2x2 merge-block order to raster order.
+
+    The image processor emits patches as (rows/2, cols/2, 2, 2) so each merge block is contiguous.
+    """
+    gh, gw = grid
+    return rows.reshape(gh // 2, gw // 2, 2, 2, -1).transpose(0, 2, 1, 3, 4).reshape(gh * gw, -1)
 
 
 class Store:
@@ -260,6 +299,7 @@ class Store:
         self._sizes = [0]
         self._file: Any = open(path, "wb")  # noqa: SIM115 - closed in finish()
         self.data: Any = None
+        self.tensor: Any = None  # the whole store on a device, after load()
 
     def append(self, rows: np.ndarray, grid: tuple[int, int]) -> None:
         self._file.write(np.ascontiguousarray(rows, np.float16).tobytes())
@@ -274,12 +314,33 @@ class Store:
     def __getitem__(self, i: int) -> np.ndarray:
         return np.asarray(self.data[self.offsets[i] : self.offsets[i + 1]])
 
+    @property
+    def nbytes(self) -> int:
+        return int(self.offsets[-1]) * self.dim * 2
+
+    def load(self, device: str) -> None:
+        """Copy the store to `device` in chunks (no full host copy)."""
+        import torch
+
+        n = int(self.offsets[-1])
+        self.tensor = torch.empty((n, self.dim), dtype=torch.float16, device=device)
+        step = max(1, (1 << 28) // (self.dim * 2))  # 256 MB at a time
+        for start in range(0, n, step):
+            self.tensor[start : start + step] = torch.from_numpy(np.asarray(self.data[start : start + step]))
+
+    def rows(self, i: int, device: str) -> Any:
+        import torch
+
+        if self.tensor is not None:
+            return self.tensor[self.offsets[i] : self.offsets[i + 1]].float()
+        return torch.from_numpy(self[i].astype(np.float32)).to(device)
+
 
 # --- targets ----------------------------------------------------------------------------------
 
 
 def targets(
-    boxes: np.ndarray, labels: np.ndarray, grid: tuple[int, int], classes: list[int]
+    boxes: np.ndarray, labels: np.ndarray, grid: tuple[int, int], classes: list[int], stride: int = STRIDE
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per patch: class labels (C, P) for `classes`, a box target (P, 4) and a box mask (P,).
 
@@ -287,7 +348,7 @@ def targets(
     holds a box's center is always positive. Its box target is the smallest such box.
     """
     gh, gw = grid
-    cy, cx = np.meshgrid((np.arange(gh) + 0.5) * STRIDE, (np.arange(gw) + 0.5) * STRIDE, indexing="ij")
+    cy, cx = np.meshgrid((np.arange(gh) + 0.5) * stride, (np.arange(gw) + 0.5) * stride, indexing="ij")
     cx, cy = cx.reshape(-1), cy.reshape(-1)
     col = {c: k for k, c in enumerate(classes)}
     cls = np.zeros((len(classes), gh * gw), np.float32)
@@ -295,7 +356,7 @@ def targets(
     best = np.full(gh * gw, np.inf)
     for b, label in sorted(zip(boxes, labels, strict=True), key=lambda t: -(t[0][2] - t[0][0]) * (t[0][3] - t[0][1])):
         inside = (cx >= b[0]) & (cx <= b[2]) & (cy >= b[1]) & (cy <= b[3])
-        center = min(int((b[1] + b[3]) / 2 // STRIDE), gh - 1) * gw + min(int((b[0] + b[2]) / 2 // STRIDE), gw - 1)
+        center = min(int((b[1] + b[3]) / 2 // stride), gh - 1) * gw + min(int((b[0] + b[2]) / 2 // stride), gw - 1)
         inside[center] = True
         area = (b[2] - b[0]) * (b[3] - b[1])
         take = inside & (area <= best)  # boxes come largest first: smaller ones overwrite
@@ -308,12 +369,14 @@ def targets(
 # --- head -------------------------------------------------------------------------------------
 
 
-def build_head(dim: int, width: int = 256, depth: int = 2) -> Any:
+def build_head(dim: int, width: int = 256, depth: int = 2, fine_dim: int = 0, quality: bool = False) -> Any:
     import torch
     from torch import nn
 
     class Head(nn.Module):
-        """Patch states + queries -> per-patch class logits (B, C, P) and boxes (B, P, 4) in pixels."""
+        """Patch states + queries -> per-cell class logits (B, C, P), boxes (B, P, 4) in pixels and,
+        with `quality`, IoU logits (B, P). With `fine_dim` the cells are the 16 px patches: the 32 px
+        states are upsampled onto them and the vision encoder's states added."""
 
         def __init__(self) -> None:
             super().__init__()
@@ -327,18 +390,44 @@ def build_head(dim: int, width: int = 256, depth: int = 2) -> Any:
             self.box = nn.Sequential(nn.Linear(width, width), nn.GELU(), nn.Linear(width, 4))
             self.scale = nn.Parameter(torch.tensor(math.log(10.0)))
             self.bias = nn.Parameter(torch.tensor(-4.0))  # low prior: most patches are background
+            self.fine = nn.Sequential(nn.LayerNorm(fine_dim), nn.Linear(fine_dim, width)) if fine_dim else None
+            self.iou = nn.Sequential(nn.Linear(width, width), nn.GELU(), nn.Linear(width, 1)) if quality else None
+            self.stride = FINE if fine_dim else STRIDE
+            # 3x3 convolutions on the cell grid: box extents come from neighbouring cells, and a
+            # local, translation-invariant layer learns that from far less data than attention
+            self.local = nn.Sequential(
+                nn.Conv2d(width, width, 3, padding=1), nn.GELU(), nn.Conv2d(width, width, 3, padding=1)
+            )
 
-        def forward(self, x: Any, pos: Any, valid: Any, q: Any) -> tuple[Any, Any]:
-            h = self.inp(x) + self.pos(pos)
+        def grid_conv(self, h: Any, cells: Any) -> Any:
+            index, rows, cols = cells  # index: each cell's place on a rows x cols canvas (padding: the extra slot)
+            b, _, w = h.shape
+            canvas = h.new_zeros(b, rows * cols + 1, w)
+            canvas.scatter_(1, index[..., None].expand(-1, -1, w), h)
+            y = self.local(canvas[:, :-1].reshape(b, rows, cols, w).permute(0, 3, 1, 2))
+            y = torch.cat([y.permute(0, 2, 3, 1).reshape(b, rows * cols, w), canvas[:, -1:]], 1)
+            return h + torch.gather(y, 1, index[..., None].expand(-1, -1, w))
+
+        def forward(
+            self, x: Any, pos: Any, valid: Any, q: Any, fine: Any = None, cells: Any = None
+        ) -> tuple[Any, Any, Any]:
+            h = self.inp(x)
+            if self.fine is not None:
+                xf, pos, valid, up, cells = fine  # cells become the 16 px patches
+                h = torch.gather(h, 1, up[..., None].expand(-1, -1, h.shape[-1])) + self.fine(xf)
+            h = h + self.pos(pos)
+            if cells is not None:
+                h = self.grid_conv(h * valid[..., None], cells)
             h = self.norm(self.encoder(h, src_key_padding_mask=~valid))
             k = nn.functional.normalize(self.key(h), dim=-1)
             e = nn.functional.normalize(self.query(q), dim=-1)
             pattern = "bpd,cd->bcp" if e.dim() == 2 else "bpd,bcd->bcp"  # shared or per-image queries
             logits = torch.einsum(pattern, k, e) * self.scale.exp() + self.bias
-            ltrb = nn.functional.softplus(self.box(h)) * STRIDE
-            centers = pos[..., 2:] * STRIDE  # (x, y) of patch centers in pixels
+            ltrb = nn.functional.softplus(self.box(h)) * self.stride
+            centers = pos[..., 2:] * self.stride  # (x, y) of cell centers in pixels
             boxes = torch.cat([centers - ltrb[..., :2], centers + ltrb[..., 2:]], dim=-1)
-            return logits, boxes
+            iou = self.iou(h).squeeze(-1) if self.iou is not None else None
+            return logits, boxes, iou
 
     return Head()
 
@@ -351,19 +440,55 @@ def positions(grid: tuple[int, int]) -> np.ndarray:
     return np.stack([(r + 0.5) / gh, (c + 0.5) / gw, c + 0.5, r + 0.5], 1).astype(np.float32)
 
 
-def batch_tensors(store: Store, idx: list[int], device: str) -> tuple[Any, Any, Any]:
+def batch_tensors(
+    store: Store, idx: list[int], device: str, fine: Store | None = None
+) -> tuple[Any, Any, Any, Any, Any]:
+    """Padded (x, pos, valid, cells) for the 32 px states and, with `fine`, (x, pos, valid, up, cells)
+    for the 16 px states, where `up` maps each 16 px cell to its 32 px patch and `cells` places the
+    cells on a rows x cols canvas for the head's convolutions."""
     import torch
 
-    pmax = max(store.offsets[i + 1] - store.offsets[i] for i in idx)
-    x = torch.zeros(len(idx), pmax, store.dim)
-    pos = torch.zeros(len(idx), pmax, 4)
-    valid = torch.zeros(len(idx), pmax, dtype=torch.bool)
+    def canvas(st: Store, n: int) -> tuple[Any, int, int]:
+        rows, cols = max(st.grids[i][0] for i in idx), max(st.grids[i][1] for i in idx)
+        index = torch.full((len(idx), n), rows * cols, dtype=torch.long)  # padding: the extra slot
+        for b, i in enumerate(idx):
+            gh, gw = st.grids[i]
+            r, c = np.divmod(np.arange(gh * gw), gw)
+            index[b, : gh * gw] = torch.from_numpy(r * cols + c)
+        return index.to(device), rows, cols
+
+    def pad(st: Store) -> tuple[Any, Any, Any]:
+        pmax = max(st.offsets[i + 1] - st.offsets[i] for i in idx)
+        x = torch.zeros(len(idx), pmax, st.dim, device=device)
+        pos = torch.zeros(len(idx), pmax, 4, device=device)
+        valid = torch.zeros(len(idx), pmax, dtype=torch.bool, device=device)
+        for b, i in enumerate(idx):
+            rows = st.rows(i, device)
+            x[b, : len(rows)] = rows
+            pos[b, : len(rows)] = torch.from_numpy(positions(st.grids[i])).to(device)
+            valid[b, : len(rows)] = True
+        return x, pos, valid
+
+    x, pos, valid = pad(store)
+    if fine is None:
+        return x, pos, valid, canvas(store, x.shape[1]), None
+    xf, posf, validf = pad(fine)
+    up = torch.zeros(len(idx), xf.shape[1], dtype=torch.long, device=device)
     for b, i in enumerate(idx):
-        rows = store[i]
-        x[b, : len(rows)] = torch.from_numpy(rows.astype(np.float32))
-        pos[b, : len(rows)] = torch.from_numpy(positions(store.grids[i]))
-        valid[b, : len(rows)] = True
-    return x.to(device), pos.to(device), valid.to(device)
+        (fh, fw), (_, gw) = fine.grids[i], store.grids[i]
+        r, c = np.divmod(np.arange(fh * fw), fw)
+        up[b, : fh * fw] = torch.from_numpy((r // 2) * gw + c // 2).to(device)
+    return x, pos, valid, None, (xf, posf, validf, up, canvas(fine, xf.shape[1]))
+
+
+def pair_iou(a: Any, b: Any) -> Any:
+    """IoU of matching rows of two (N, 4) xyxy tensors."""
+    import torch
+
+    lt, rb = torch.maximum(a[:, :2], b[:, :2]), torch.minimum(a[:, 2:], b[:, 2:])
+    inter = (rb - lt).clamp(min=0).prod(-1)
+    area = lambda x: (x[:, 2] - x[:, 0]).clamp(min=0) * (x[:, 3] - x[:, 1]).clamp(min=0)
+    return inter / (area(a) + area(b) - inter + 1e-9)
 
 
 def train_head(
@@ -378,19 +503,23 @@ def train_head(
     negatives: int,
     seed: int,
     image_queries: list[tuple[list[int], np.ndarray]] | None = None,
+    fine: Store | None = None,
+    quality: bool = False,
 ) -> Any:
     """Train a head on the first `len(boxes)` images of `store`.
 
     Text queries (`image_queries` None): each batch is scored against its present seen classes
     plus `negatives` absent ones, with the shared `queries`. Image queries: each image against
-    the classes it was asked about, with its own decision-token states.
+    the classes it was asked about, with its own decision-token states. With `fine` the head
+    works on 16 px cells; with `quality` it also learns each box's IoU.
     """
     import torch
     from torchvision.ops import generalized_box_iou_loss, sigmoid_focal_loss
 
     torch.manual_seed(seed)
     rng = random.Random(seed)
-    head = build_head(store.dim).to(device)
+    head = build_head(store.dim, fine_dim=fine.dim if fine else 0, quality=quality).to(device)
+    cells, stride = (fine, FINE) if fine is not None else (store, STRIDE)
     q_all = torch.from_numpy(queries).to(device)
     opt = torch.optim.AdamW(head.parameters(), lr=3e-4, weight_decay=0.05)
     order = list(range(len(boxes)))
@@ -402,7 +531,8 @@ def train_head(
         t0, total = time.perf_counter(), 0.0
         for start in range(0, len(order), batch):
             idx = order[start : start + batch]
-            x, pos, valid = batch_tensors(store, idx, device)
+            x, pos, valid, cells_t, fine_t = batch_tensors(store, idx, device, fine)
+            n_cells = fine_t[0].shape[1] if fine_t is not None else x.shape[1]
             if image_queries is None:
                 present = sorted({int(c) for i in idx for c in labels[i] if c in seen_set})
                 absent = [c for c in seen if c not in present]
@@ -417,16 +547,18 @@ def train_head(
                 q = q.to(device)
             cmax = max(map(len, lists))
             cmask = torch.zeros(len(idx), cmax, dtype=torch.bool, device=device)
-            cls_t = torch.zeros(len(idx), cmax, x.shape[1], device=device)
-            box_t = torch.zeros(len(idx), x.shape[1], 4, device=device)
-            box_m = torch.zeros(len(idx), x.shape[1], dtype=torch.bool, device=device)
+            cls_t = torch.zeros(len(idx), cmax, n_cells, device=device)
+            box_t = torch.zeros(len(idx), n_cells, 4, device=device)
+            box_m = torch.zeros(len(idx), n_cells, dtype=torch.bool, device=device)
             for b, i in enumerate(idx):
-                c, bx, m = targets(boxes[i], labels[i], store.grids[i], lists[b])
+                c, bx, m = targets(boxes[i], labels[i], cells.grids[i], lists[b], stride)
                 n = c.shape[1]
                 cmask[b, : len(lists[b])] = True
                 cls_t[b, : len(lists[b]), :n] = torch.from_numpy(c)
                 box_t[b, :n], box_m[b, :n] = torch.from_numpy(bx), torch.from_numpy(m)
-            logits, pred = head(x, pos, valid, q)
+            logits, pred, iou = head(x, pos, valid, q, fine_t, cells_t)
+            if fine_t is not None:
+                valid = fine_t[2]
             mask = valid[:, None, :] & cmask[:, :, None]
             n_pos = max(1.0, float(cls_t.sum()))
             loss_cls = sigmoid_focal_loss(logits[mask], cls_t[mask], reduction="sum") / n_pos
@@ -434,6 +566,9 @@ def train_head(
             if box_m.any():
                 p, t = pred[box_m], box_t[box_m]
                 loss_box = generalized_box_iou_loss(p, t, reduction="mean") + (p - t).abs().mean() / 64
+                if iou is not None:
+                    target_iou = pair_iou(p.detach(), t)
+                    loss_box = loss_box + torch.nn.functional.binary_cross_entropy_with_logits(iou[box_m], target_iou)
             loss = loss_cls + 2.0 * loss_box
             opt.zero_grad()
             loss.backward()
@@ -447,16 +582,27 @@ def train_head(
 
 
 def detect(
-    head: Any, store: Store, i: int, queries: np.ndarray, device: str, top: int = 50, iou: float = 0.6
+    head: Any,
+    store: Store,
+    i: int,
+    queries: np.ndarray,
+    device: str,
+    top: int = 50,
+    iou: float = 0.6,
+    fine: Store | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(boxes, scores, labels) for one image over all classes, at most 100, before presence."""
+    """(boxes, scores, labels) for one image over all classes, at most 100, before presence.
+
+    With an IoU branch, a detection's score is its class score times its predicted IoU."""
     import torch
     from torchvision.ops import batched_nms
 
-    x, pos, valid = batch_tensors(store, [i], device)
+    x, pos, valid, cells_t, fine_t = batch_tensors(store, [i], device, fine)
     with torch.inference_mode():
-        logits, boxes = head(x, pos, valid, torch.from_numpy(queries).to(device))
+        logits, boxes, quality = head(x, pos, valid, torch.from_numpy(queries).to(device), fine_t, cells_t)
     scores = logits[0].sigmoid()  # (C, P)
+    if quality is not None:
+        scores = scores * quality[0].sigmoid()[None]
     k = min(top, scores.shape[1])
     s, p = scores.topk(k, dim=1)
     labels = torch.arange(scores.shape[0], device=device)[:, None].expand(-1, k).reshape(-1)
@@ -596,6 +742,9 @@ def reference(weights: str, images: list[PILImage.Image], device: str) -> tuple[
 # --- experiment -------------------------------------------------------------------------------
 
 
+HEADS = {"s32": "", "s16": ", stride 16", "s16q": ", stride 16 + IoU"}  # --heads: row label suffix
+
+
 def markdown(report: dict[str, Any]) -> str:
     cfg = report["config"]
     head = (
@@ -634,6 +783,10 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--negatives", type=int, default=8, help="absent classes per image (image) or batch (text)")
+    ap.add_argument("--heads", nargs="+", choices=list(HEADS), default=["s32"], help="s16/s16q need the decision pass")
+    ap.add_argument(
+        "--features-on", choices=["auto", "gpu", "disk"], default="auto", help="where training reads features"
+    )
     ap.add_argument("--reference", nargs="*", default=[], help="Ultralytics weights to score on the same images")
     ap.add_argument("--device", default=None)
     ap.add_argument("--dtype", default=None)
@@ -674,8 +827,14 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     everything = list(range(len(names)))
     rng = random.Random(args.seed)
 
-    extractor = Extractor(path, device, dtype, args.layers, args.chunk, args.max_side)
+    fine_heads = any(h != "s32" for h in args.heads)
+    if fine_heads and "image" not in args.queries:
+        raise SystemExit("--heads s16/s16q read the vision encoder during the decision pass: add --queries image")
+    extractor = Extractor(path, device, dtype, args.layers, args.chunk, args.max_side, fine=fine_heads)
     train_store, val_store = Store(work / "train.f16", extractor.dim), Store(work / "val.f16", extractor.dim)
+    fine_dim = extractor.fine_dim
+    train_fine = Store(work / "train_fine.f16", fine_dim) if fine_heads else None
+    val_fine = Store(work / "val_fine.f16", fine_dim) if fine_heads else None
     train_boxes: list[np.ndarray] = []
     train_q: list[tuple[list[int], np.ndarray]] = []
     val_boxes: list[np.ndarray] = []
@@ -692,8 +851,10 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
                     present = sorted({int(c) for c in it.labels if c in seen_set})
                     absent = [c for c in seen if c not in present]
                     asked = present + rng.sample(absent, min(args.negatives, len(absent)))
-                    rows, states, _ = extractor.decide(image, asked, names)
+                    rows, states, _, fine = extractor.decide(image, asked, names)
                     train_store.append(rows, (image.size[1] // STRIDE, image.size[0] // STRIDE))
+                    if train_fine is not None:
+                        train_fine.append(fine, (image.size[1] // FINE, image.size[0] // FINE))
                     train_q.append((asked, states))
                     train_boxes.append(b)
             else:
@@ -702,12 +863,16 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
                     train_boxes.append(b)
             print(f"train: {start + len(pairs)}/{len(train)} images, {time.perf_counter() - t0:.0f}s", flush=True)
         train_store.finish()
+        if train_fine is not None:
+            train_fine.finish()
         # val: every class asked with the image (presence and image queries for all classes)
         t0 = time.perf_counter()
         for k, it in enumerate(val):
             image, b = fitted(it, args.max_side)
-            rows, states, presence = extractor.decide(image, everything, names)
+            rows, states, presence, fine = extractor.decide(image, everything, names)
             val_store.append(rows, (image.size[1] // STRIDE, image.size[0] // STRIDE))
+            if val_fine is not None:
+                val_fine.append(fine, (image.size[1] // FINE, image.size[0] // FINE))
             val_boxes.append(b)
             val_q.append(states.astype(np.float32))
             val_presence.append(presence)
@@ -716,6 +881,8 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
                 print(f"val: {k + 1}/{len(val)} images, {time.perf_counter() - t0:.0f}s", flush=True)
         decide_ms = (time.perf_counter() - t0) * 1000 / len(val)
         val_store.finish()
+        if val_fine is not None:
+            val_fine.finish()
         probe = val_images[: min(32, len(val_images))]
         t0 = time.perf_counter()
         extractor.patches(probe)
@@ -723,37 +890,58 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     finally:
         extractor.close()
 
+    stores = [st for st in (train_store, val_store, train_fine, val_fine) if st is not None]
+    total = sum(st.nbytes for st in stores)
+    on_gpu = args.features_on == "gpu"
+    if args.features_on == "auto" and device.startswith("cuda"):
+        on_gpu = torch.cuda.mem_get_info()[0] > 1.3 * total
+    print(f"features: {total / 2**30:.1f} GB, read from {'the GPU' if on_gpu else 'disk'} during training", flush=True)
+    if on_gpu:
+        for st in stores:
+            st.load(device)
+
     truth = [(b, it.labels) for b, it in zip(val_boxes, val, strict=True)]
     gt_presence = [np.isin(everything, it.labels).astype(np.float32) for it in val]
     labels = [it.labels for it in train]
     results: dict[str, dict[str, Any]] = {}
     for mode in args.queries:
-        for n in sizes:
-            print(f"training: {mode} queries, {n} images", flush=True)
-            head = train_head(
-                train_store,
-                train_boxes[:n],
-                labels[:n],
-                text_q,
-                seen,
-                device,
-                args.epochs,
-                args.batch,
-                args.negatives,
-                args.seed,
-                image_queries=train_q[:n] if mode == "image" else None,
-            )
-            t0 = time.perf_counter()
-            dets = [detect(head, val_store, i, text_q if mode == "text" else val_q[i], device) for i in range(len(val))]
-            head_ms = (time.perf_counter() - t0) * 1000 / len(val)
-            base = (patch_ms if mode == "text" else decide_ms) + head_ms
-            name = f"{mode} query, {n} images"
-            results[name] = {**evaluate(dets, truth, len(names), seen_set), "ms": base}
-            results[f"{name} x presence"] = {
-                **evaluate(rescore(dets, val_presence), truth, len(names), seen_set),
-                "ms": base + (decide_ms if mode == "text" else 0.0),
-            }
-            results[f"{name} x GT presence"] = {**evaluate(rescore(dets, gt_presence), truth, len(names), seen_set)}
+        for kind in args.heads:
+            if kind != "s32" and mode != "image":
+                continue  # stride-16 heads are measured with the decision-token query
+            fine_train, fine_val = (train_fine, val_fine) if kind != "s32" else (None, None)
+            for n in sizes:
+                print(f"training: {mode} queries, {kind}, {n} images", flush=True)
+                head = train_head(
+                    train_store,
+                    train_boxes[:n],
+                    labels[:n],
+                    text_q,
+                    seen,
+                    device,
+                    args.epochs,
+                    args.batch,
+                    args.negatives,
+                    args.seed,
+                    image_queries=train_q[:n] if mode == "image" else None,
+                    fine=fine_train,
+                    quality=kind == "s16q",
+                )
+                t0 = time.perf_counter()
+                dets = [
+                    detect(head, val_store, i, text_q if mode == "text" else val_q[i], device, fine=fine_val)
+                    for i in range(len(val))
+                ]
+                head_ms = (time.perf_counter() - t0) * 1000 / len(val)
+                base = (patch_ms if mode == "text" else decide_ms) + head_ms
+                name = f"{mode} query, {n} images{HEADS[kind]}"
+                results[name] = {**evaluate(dets, truth, len(names), seen_set), "ms": base}
+                results[f"{name} x presence"] = {
+                    **evaluate(rescore(dets, val_presence), truth, len(names), seen_set),
+                    "ms": base + (decide_ms if mode == "text" else 0.0),
+                }
+                gt = evaluate(rescore(dets, gt_presence), truth, len(names), seen_set)
+                results[f"{name} x GT presence"] = gt
+                del head
     for weights in args.reference:
         ref, ms = reference(weights, val_images, device)
         results[weights] = {**evaluate(ref, truth, len(names), seen_set), "ms": ms}
@@ -765,6 +953,7 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         "seen_classes": len(seen),
         "classes": len(names),
         "cost_ms": {"patch_pass": patch_ms, "decision_pass_all_classes": decide_ms},
+        "features_gb": total / 2**30,
         "config": {k: v for k, v in vars(args).items()} | {"device": device, "dtype": dtype, "train_sizes": sizes},
         "gpu": torch.cuda.get_device_name() if device.startswith("cuda") else device,
     }

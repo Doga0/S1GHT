@@ -204,3 +204,115 @@ def test_head_learns_planted_location(tmp_path: Path) -> None:
     result = ph.coco_map(dets, list(zip(vb, vl, strict=True)), list(range(n_cls)))
     assert result["map50"] > 0.8, result
     assert result["map"] > 0.25, result
+
+
+def test_merge_to_raster() -> None:
+    gh, gw = 4, 6
+    raster = np.arange(gh * gw)
+    merge_order = raster.reshape(gh // 2, 2, gw // 2, 2).transpose(0, 2, 1, 3).reshape(-1)  # as the processor emits
+    assert ph.merge_to_raster(merge_order[:, None], (gh, gw))[:, 0].tolist() == raster.tolist()
+
+
+@pytest.mark.network
+def test_processor_patch_order(tiny_qwen: str) -> None:  # noqa: F811
+    """Qwen-VL's image processor emits 16 px patches in 2x2 merge blocks; merge_to_raster undoes it."""
+    from transformers import AutoProcessor
+
+    processor = AutoProcessor.from_pretrained(tiny_qwen)
+    gh, gw = 16, 24  # 256 x 384 px: above the processor's minimum area, so it is not resized
+    pixels = np.zeros((gh * 16, gw * 16, 3), np.uint8)
+    for r in range(gh):
+        for c in range(gw):
+            pixels[r * 16 : (r + 1) * 16, c * 16 : (c + 1) * 16] = (10 * r + 5, 10 * c + 5, 0)
+    out = processor.image_processor(images=[PILImage.fromarray(pixels)], return_tensors="pt")
+    assert out["image_grid_thw"].tolist() == [[1, gh, gw]]
+    pv = out["pixel_values"].float().numpy()
+    third = pv.shape[1] // 3  # channel-major rows: R, G, B
+    ids = []
+    for channel, n in ((0, gh), (1, gw)):
+        m = pv[:, channel * third : (channel + 1) * third].mean(1)
+        ids.append(np.round((m - m.min()) / (m.max() - m.min()) * (n - 1)).astype(int))
+    patch_ids = ids[0] * gw + ids[1]
+    assert ph.merge_to_raster(patch_ids[:, None], (gh, gw))[:, 0].tolist() == list(range(gh * gw))
+
+
+@pytest.mark.slow
+def test_fine_head_learns_small_objects(tmp_path: Path) -> None:
+    """The stride-16 head with an IoU branch: location planted only in the 16 px features, boxes of
+    16-64 px on that grid, coarse 32 px features pure noise. Without the head's 3x3 convolutions
+    this stayed at mAP50 0.14 (boxes overfit: IoU 0.64 train, 0.32 val). About 2 min on a CPU."""
+    torch = pytest.importorskip("torch")
+    torch.set_num_threads(4)
+    rng = np.random.default_rng(1)
+    n_cls, dim, grid, fine_grid = 4, 32, (8, 10), (16, 20)
+    vectors = rng.normal(size=(n_cls, dim)).astype(np.float32)
+    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
+    centers = ph.positions(fine_grid)[:, 2:] * ph.FINE
+
+    def sample() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        boxes, labels = [], []
+        for c in rng.choice(n_cls, size=2, replace=False):
+            w, h = rng.integers(1, 5) * 16, rng.integers(1, 5) * 16
+            x, y = rng.integers(0, 20 - w // 16 + 1) * 16, rng.integers(0, 16 - h // 16 + 1) * 16
+            boxes.append([x, y, x + w, y + h])
+            labels.append(c)
+        b = np.array(boxes, np.float32)
+        fine = rng.normal(scale=0.1, size=(fine_grid[0] * fine_grid[1], dim)).astype(np.float32)
+        for bb, c in zip(b, labels, strict=True):
+            inside = (
+                (centers[:, 0] > bb[0]) & (centers[:, 0] < bb[2]) & (centers[:, 1] > bb[1]) & (centers[:, 1] < bb[3])
+            )
+            fine[inside] += vectors[c]
+        coarse = rng.normal(scale=0.1, size=(grid[0] * grid[1], dim)).astype(np.float32)  # queries share its width
+        return coarse, fine, b, np.array(labels)
+
+    def stores(name: str, n: int) -> tuple[ph.Store, ph.Store, list, list]:
+        coarse_s, fine_s = ph.Store(tmp_path / f"{name}.f16", dim), ph.Store(tmp_path / f"{name}_fine.f16", dim)
+        boxes, labels = [], []
+        for _ in range(n):
+            c, f, b, lab = sample()
+            coarse_s.append(c, grid)
+            fine_s.append(f, fine_grid)
+            boxes.append(b)
+            labels.append(lab)
+        coarse_s.finish()
+        fine_s.finish()
+        return coarse_s, fine_s, boxes, labels
+
+    train, train_f, tb, tl = stores("train", 128)
+    val, val_f, vb, vl = stores("val", 16)
+    head = ph.train_head(
+        train,
+        tb,
+        tl,
+        vectors,
+        list(range(n_cls)),
+        "cpu",
+        epochs=12,
+        batch=8,
+        negatives=2,
+        seed=0,
+        fine=train_f,
+        quality=True,
+    )
+    dets = [ph.detect(head, val, i, vectors, "cpu", fine=val_f) for i in range(16)]
+    result = ph.coco_map(dets, list(zip(vb, vl, strict=True)), list(range(n_cls)))
+    assert result["map50"] > 0.6, result  # broken (no convolutions): 0.14
+    assert result["map"] > 0.2, result
+
+
+@pytest.mark.network
+def test_end_to_end_fine_heads(tiny_qwen: str, tmp_path: Path) -> None:  # noqa: F811
+    root = coco_dataset(tmp_path / "coco")
+    report = ph.main(
+        [
+            *("--model", tiny_qwen, "--coco", str(root), "--work", str(tmp_path / "work")),
+            *("--train-sizes", "6", "--val-images", "4", "--layers", "1", "2", "--chunk", "3"),
+            *("--queries", "image", "--heads", "s32", "s16", "s16q", "--features-on", "disk"),
+            *("--epochs", "2", "--batch", "3", "--negatives", "2", "--device", "cpu", "--dtype", "fp32"),
+        ]
+    )
+    heads = ("", ", stride 16", ", stride 16 + IoU")
+    suffixes = ("", " x presence", " x GT presence")
+    assert set(report["results"]) == {f"image query, 6 images{h}{s}" for h in heads for s in suffixes}
+    assert report["features_gb"] > 0
