@@ -131,6 +131,7 @@ def test_end_to_end_tiny_model(tiny_qwen: str, tmp_path: Path) -> None:
         assert name in best, name
         assert 0.0 <= best[name]["test_auc"] <= 1.0 or np.isnan(best[name]["test_auc"])
     assert best["tiles_2"]["layer"] == -1
+    assert best["oracle"]["test_auc"] == 1.0  # the mask itself: only the box extraction limits it
     # class 3 is held out from the probes: graded with the seen probe's layer and threshold
     assert best["bilinear_unseen"]["layer"] == best["bilinear"]["layer"]
     assert best["bilinear_unseen"]["threshold"] == best["bilinear"]["threshold"]
