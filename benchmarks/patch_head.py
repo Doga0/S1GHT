@@ -1,33 +1,46 @@
-"""P2.1: does a small trained head turn a frozen decision model into a detector? (COCO mAP)
+"""P2.1-P2.2: does a small trained head turn a frozen decision model into a detector? (COCO mAP)
 
-    python benchmarks/patch_head.py --device cuda --presence --reference yolo26n.pt --out head.json
-    python benchmarks/patch_head.py --train-images 8000 --layers 4 16 20 --epochs 20
+    python benchmarks/patch_head.py --device cuda --reference yolo26n.pt --out head.json
+    python benchmarks/patch_head.py --train-sizes 2000 4000 8000 --queries text image
 
 P2.0 (`patch_signal.py`) showed that a frozen Qwen3-VL-4B knows *whether* an object is there
 (presence AUC 0.99) but that location does not fall out of training-free readouts or linear
-probes (patch AUC ≤ 0.81). This experiment trains what detectors actually train: a small head
-on the frozen model's patch states, with a score and a box per patch, and measures COCO mAP.
+probes (patch AUC <= 0.81). P2.1 trained a small head on the frozen patch states: 0.071 mAP,
+0.145 with the model's presence answer, 0.007 on held-out classes (YOLO26n: 0.436). P2.2 asks
+why, in one run:
 
-- **Features:** one forward pass per image (S1GHT's prompt with the image). The decision prompt
-  comes after the image and attention is causal, so patch states do not depend on the question:
-  they are computed once per frame and serve every query. States of `--layers` are concatenated
-  and cached on disk (float16 memmap).
-- **Queries:** per class, the hidden state at the same layers of the last token of a text-only
-  Noul prompt "Is there a {class} in the image?", computed once ("prompt-then-detect").
+- **Query from the decision token (`--queries image`):** the query vector is the hidden state of
+  the decision token of S1GHT's ordinary Noul prompt *with the image* ("Is there a {class} in
+  `image`?"), the representation that gives presence AUC 0.99, instead of a text-only prompt's
+  (`text`). One forward pass per (image, class) gives the patch states, the query vector and
+  P(yes) together. Each prompt re-encodes the image here (no prefix cache), which the cost
+  column shows.
+- **Diagnostics:** `x GT presence` multiplies scores by the ground truth's class presence, the
+  upper bound of a perfect presence answer, so classification and localization errors separate;
+  class-agnostic mAP (all classes merged, class-agnostic NMS); and mAP for small, medium and
+  large objects (COCO area ranges), to see what the 32 px patch stride costs.
+- **Data scaling (`--train-sizes`):** heads trained on 2k, 4k, 8k ... images (nested random
+  subsets of one sample), to see whether mAP grows with data or plateaus.
+
+The rest is P2.1:
+- **Features:** the decision prompt comes after the image and attention is causal, so patch
+  states do not depend on the question. States of `--layers` are concatenated and cached on
+  disk (float16 memmap).
 - **Head:** LayerNorm + linear, 2D position, a 2-layer transformer over the patches; class score
   = scaled cosine(patch, query) + bias (OWL-ViT style); a class-agnostic box per patch as
   distances to the four sides (FCOS style). Focal loss for scores, GIoU + L1 for boxes. A patch
   is positive for a class when its center lies in a box of that class; the patch holding a box's
   center is always positive (small objects).
 - **Classes:** every 4th COCO class (20) is held out from training; mAP is reported for seen
-  and unseen classes.
-- **Inference:** sigmoid scores, top-k per class, NMS, 100 detections per image. `--presence`
-  multiplies each class's scores by the model's own Noul answer for that image (asked for the
-  `--presence-top` classes with the highest head score; the others are dropped).
+  and unseen classes. With image queries, each training image is asked about its present seen
+  classes plus `--negatives` absent seen ones.
+- **Inference:** sigmoid scores, top-k per class, NMS, 100 detections per image. `x presence`
+  multiplies each class's scores by the model's own Noul answer, asked for all classes.
 - **mAP:** COCO style (IoU 0.50:0.95, 101-point interpolation, 100 detections, crowd boxes
-  removed), computed here so seen and unseen classes can be split. `--reference` runs Ultralytics
-  models on the same pixels and scores them with the same code: they are trained on all of COCO
-  train (118k images), so they are a yardstick, not a like-for-like comparison.
+  removed, COCO's ignore rules for area ranges), computed here so classes can be split.
+  `--reference` runs Ultralytics models on the same pixels and scores them with the same code:
+  they are trained on all of COCO train (118k images), so they are a yardstick, not a
+  like-for-like comparison.
 
 Data: COCO 2017 from images.cocodataset.org. The annotation zip (253 MB) is downloaded once,
 then only the sampled images (~160 kB each).
@@ -56,6 +69,7 @@ from s1ght.runtimes import letters
 COCO_URL = "http://images.cocodataset.org"
 STRIDE = 32  # Qwen3-VL: 16 px patches merged 2x2
 IOUS = np.linspace(0.5, 0.95, 10)
+AREAS = {"small": (0.0, 32.0**2), "medium": (32.0**2, 96.0**2), "large": (96.0**2, float("inf"))}
 
 
 # --- data -------------------------------------------------------------------------------------
@@ -87,8 +101,9 @@ def fetch_annotations(root: Path) -> None:
 def load_split(root: Path, split: str, n: int, seed: int) -> tuple[list[Item], list[str]]:
     """`n` images with at least one non-crowd box, and the class names in contiguous order.
 
-    Val takes the first `n` image ids; train a seeded random sample. Category ids are mapped to
-    0..K-1 in sorted order (Ultralytics' COCO order).
+    Val takes the first `n` image ids; train a seeded random sample in random order, so its
+    prefixes are nested random subsets. Category ids are mapped to 0..K-1 in sorted order
+    (Ultralytics' COCO order).
     """
     data = json.loads((root / "annotations" / f"instances_{split}.json").read_text())
     cats = sorted(data["categories"], key=lambda c: c["id"])
@@ -102,7 +117,7 @@ def load_split(root: Path, split: str, n: int, seed: int) -> tuple[list[Item], l
         if w > 1 and h > 1:
             by_image.setdefault(a["image_id"], []).append(([x, y, x + w, y + h], index[a["category_id"]]))
     ids = sorted(by_image)
-    ids = ids[:n] if split.startswith("val") else sorted(random.Random(seed).sample(ids, min(n, len(ids))))
+    ids = ids[:n] if split.startswith("val") else random.Random(seed).sample(ids, min(n, len(ids)))
     items = []
     for i in ids:
         boxes, labels = zip(*by_image[i], strict=True)
@@ -138,7 +153,7 @@ def fitted(item: Item, max_side: int) -> tuple[PILImage.Image, np.ndarray]:
 
 
 class Extractor:
-    """Patch states (one forward per image), text query states and presence from a `qwen_vl` model."""
+    """Patch states, query states (text-only or decision token) and presence from a `qwen_vl` model."""
 
     def __init__(self, path: str, device: str, dtype: str, layers: list[int], chunk: int, max_side: int) -> None:
         from s1ght.runtimes.native.families.qwen_vl import QwenVlFamily
@@ -195,11 +210,41 @@ class Extractor:
             out.append(torch.cat([hs[layer][:, -1] for layer in self.layers], dim=-1).float().cpu().numpy())
         return np.concatenate(out)
 
-    def presence(self, image: PILImage.Image, classes: list[int], names: list[str]) -> np.ndarray:
-        """The model's own Noul answer, P(yes), for each class (S1GHT's ordinary readout)."""
-        questions = {str(c): Noul(f"Is there a {names[c]} in `image`?").to_wire() for c in classes}
-        answers, _ = self.family.run([({"image": "[image 1]"}, questions, [image])])[0]
-        return np.array([answers[str(c)]["noul"] for c in classes])
+    def decide(
+        self, image: PILImage.Image, classes: list[int], names: list[str]
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """S1GHT's Noul prompt per class, with the image: patch states (P, dim) float16, the
+        decision token's states (C, dim) float16 and the model's answer P(yes) (C,)."""
+        import torch
+
+        state = {"image": "[image 1]"}
+        texts = [
+            self.text(letters.build(0, "q", state, Noul(f"Is there a {names[c]} in `image`?").to_wire(), 1, (0, 1)))
+            for c in classes
+        ]
+        yes, no = self.family.letter_ids["A"], self.family.letter_ids["B"]
+        patches, states, presence = None, [], []
+        for start in range(0, len(texts), self.chunk):
+            batch = texts[start : start + self.chunk]
+            inputs = self.processor(text=batch, images=[image] * len(batch), padding=True, return_tensors="pt")
+            inputs = inputs.to(self.device)
+            with torch.inference_mode():
+                out = self.model(**inputs, output_hidden_states=True, logits_to_keep=1)
+            hs = out.hidden_states
+            if patches is None:  # causal: every row has the same patch states
+                where = (inputs["input_ids"][0] == self.image_token).nonzero().flatten()
+                expected = (image.size[1] // STRIDE) * (image.size[0] // STRIDE)
+                if len(where) != expected:
+                    raise RuntimeError(f"{len(where)} image tokens, expected {expected} for {image.size}")
+                rows = torch.cat([hs[layer][0, where] for layer in self.layers], -1)
+                patches = rows.to(torch.float16).cpu().numpy()
+            last = torch.cat([hs[layer][:, -1] for layer in self.layers], -1)
+            states.append(last.to(torch.float16).cpu().numpy())
+            logits = out.logits[:, -1].float()
+            margin = torch.logsumexp(logits[:, yes], -1) - torch.logsumexp(logits[:, no], -1)
+            presence.append(torch.sigmoid(margin).cpu().numpy())
+        assert patches is not None
+        return patches, np.concatenate(states), np.concatenate(presence)
 
     def close(self) -> None:
         self.family.close()
@@ -288,7 +333,8 @@ def build_head(dim: int, width: int = 256, depth: int = 2) -> Any:
             h = self.norm(self.encoder(h, src_key_padding_mask=~valid))
             k = nn.functional.normalize(self.key(h), dim=-1)
             e = nn.functional.normalize(self.query(q), dim=-1)
-            logits = torch.einsum("bpd,cd->bcp", k, e) * self.scale.exp() + self.bias
+            pattern = "bpd,cd->bcp" if e.dim() == 2 else "bpd,bcd->bcp"  # shared or per-image queries
+            logits = torch.einsum(pattern, k, e) * self.scale.exp() + self.bias
             ltrb = nn.functional.softplus(self.box(h)) * STRIDE
             centers = pos[..., 2:] * STRIDE  # (x, y) of patch centers in pixels
             boxes = torch.cat([centers - ltrb[..., :2], centers + ltrb[..., 2:]], dim=-1)
@@ -331,7 +377,14 @@ def train_head(
     batch: int,
     negatives: int,
     seed: int,
+    image_queries: list[tuple[list[int], np.ndarray]] | None = None,
 ) -> Any:
+    """Train a head on the first `len(boxes)` images of `store`.
+
+    Text queries (`image_queries` None): each batch is scored against its present seen classes
+    plus `negatives` absent ones, with the shared `queries`. Image queries: each image against
+    the classes it was asked about, with its own decision-token states.
+    """
     import torch
     from torchvision.ops import generalized_box_iou_loss, sigmoid_focal_loss
 
@@ -349,24 +402,32 @@ def train_head(
         t0, total = time.perf_counter(), 0.0
         for start in range(0, len(order), batch):
             idx = order[start : start + batch]
-            present = sorted({int(c) for i in idx for c in labels[i] if c in seen_set})
-            classes = present + rng.sample(
-                [c for c in seen if c not in present], min(negatives, len(seen) - len(present))
-            )
             x, pos, valid = batch_tensors(store, idx, device)
-            cls_t = torch.zeros(len(idx), len(classes), x.shape[1], device=device)
+            if image_queries is None:
+                present = sorted({int(c) for i in idx for c in labels[i] if c in seen_set})
+                absent = [c for c in seen if c not in present]
+                shared = present + rng.sample(absent, min(negatives, len(absent)))
+                lists = [shared] * len(idx)
+                q = q_all[shared]
+            else:
+                lists = [image_queries[i][0] for i in idx]
+                q = torch.zeros(len(idx), max(map(len, lists)), store.dim)
+                for b, i in enumerate(idx):
+                    q[b, : len(lists[b])] = torch.from_numpy(image_queries[i][1].astype(np.float32))
+                q = q.to(device)
+            cmax = max(map(len, lists))
+            cmask = torch.zeros(len(idx), cmax, dtype=torch.bool, device=device)
+            cls_t = torch.zeros(len(idx), cmax, x.shape[1], device=device)
             box_t = torch.zeros(len(idx), x.shape[1], 4, device=device)
             box_m = torch.zeros(len(idx), x.shape[1], dtype=torch.bool, device=device)
             for b, i in enumerate(idx):
-                c, bx, m = targets(boxes[i], labels[i], store.grids[i], classes)
+                c, bx, m = targets(boxes[i], labels[i], store.grids[i], lists[b])
                 n = c.shape[1]
-                cls_t[b, :, :n], box_t[b, :n], box_m[b, :n] = (
-                    torch.from_numpy(c),
-                    torch.from_numpy(bx),
-                    torch.from_numpy(m),
-                )
-            logits, pred = head(x, pos, valid, q_all[classes])
-            mask = valid[:, None, :].expand_as(logits)
+                cmask[b, : len(lists[b])] = True
+                cls_t[b, : len(lists[b]), :n] = torch.from_numpy(c)
+                box_t[b, :n], box_m[b, :n] = torch.from_numpy(bx), torch.from_numpy(m)
+            logits, pred = head(x, pos, valid, q)
+            mask = valid[:, None, :] & cmask[:, :, None]
             n_pos = max(1.0, float(cls_t.sum()))
             loss_cls = sigmoid_focal_loss(logits[mask], cls_t[mask], reduction="sum") / n_pos
             loss_box = torch.zeros((), device=device)
@@ -415,57 +476,108 @@ def box_iou(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return inter / (area(a)[:, None] + area(b)[None] - inter + 1e-9)
 
 
+def _area(b: np.ndarray) -> np.ndarray:
+    return (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
+
+
 def average_precision(
-    dets: list[tuple[np.ndarray, np.ndarray, np.ndarray]], truth: list[tuple[np.ndarray, np.ndarray]], cls: int
+    dets: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    truth: list[tuple[np.ndarray, np.ndarray]],
+    cls: int,
+    area: tuple[float, float] | None = None,
 ) -> np.ndarray | None:
-    """COCO AP of one class at each IoU in `IOUS` (101-point); None when it has no ground truth."""
-    n_true = sum(int((lab == cls).sum()) for _, lab in truth)
+    """COCO AP of one class at each IoU in `IOUS` (101-point); None when it has no ground truth.
+
+    With `area` (min, max), COCO's rules: ground truth outside the range is ignored (a detection
+    matched to it counts for nothing), and so are unmatched detections outside the range.
+    """
+    gts, ignore = [], []
+    for boxes, labels in truth:
+        g = boxes[labels == cls]
+        ign = np.zeros(len(g), bool) if area is None else ~((_area(g) >= area[0]) & (_area(g) < area[1]))
+        order = np.argsort(ign, kind="stable")  # matchable ground truth first
+        gts.append(g[order])
+        ignore.append(ign[order])
+    n_true = int(sum((~ign).sum() for ign in ignore))
     if n_true == 0:
         return None
     records = []  # (score, image, box)
     for img, (boxes, scores, labels) in enumerate(dets):
-        for b, s in zip(boxes[labels == cls], scores[labels == cls], strict=True):
-            records.append((float(s), img, b))
+        for b, sc in zip(boxes[labels == cls], scores[labels == cls], strict=True):
+            records.append((float(sc), img, b))
     records.sort(key=lambda r: -r[0])
     out = np.zeros(len(IOUS))
     for t, thr in enumerate(IOUS):
-        used = {img: np.zeros(int((lab == cls).sum()), bool) for img, (_, lab) in enumerate(truth)}
-        tp = np.zeros(len(records))
+        used = [np.zeros(len(g), bool) for g in gts]
+        tp, keep = np.zeros(len(records)), np.ones(len(records), bool)
         for k, (_, img, b) in enumerate(records):
-            gt = truth[img][0][truth[img][1] == cls]
-            if len(gt) == 0:
-                continue
-            ious = box_iou(b[None], gt)[0]
-            ious[used[img]] = -1
-            j = int(ious.argmax())
-            if ious[j] >= thr:
-                used[img][j] = True
-                tp[k] = 1
+            g, ign = gts[img], ignore[img]
+            match = -1
+            if len(g):
+                ious = box_iou(b[None], g)[0]
+                ious[used[img]] = -1
+                for subset in (~ign, ign):  # a matchable box first, an ignored one only if none fits
+                    cand = np.where(subset & (ious >= thr))[0]
+                    if len(cand):
+                        match = int(cand[ious[cand].argmax()])
+                        break
+            if match >= 0:
+                used[img][match] = True
+                tp[k], keep[k] = (0, False) if ign[match] else (1, True)
+            elif area is not None and not (area[0] <= _area(b[None])[0] < area[1]):
+                keep[k] = False
+        tp = tp[keep]
         ctp = np.cumsum(tp)
         recall = ctp / n_true
-        precision = ctp / np.arange(1, len(records) + 1) if records else np.zeros(0)
+        precision = ctp / np.arange(1, len(tp) + 1) if len(tp) else np.zeros(0)
         precision = np.maximum.accumulate(precision[::-1])[::-1] if len(precision) else precision
-        points = np.linspace(0, 1, 101)
-        where = np.searchsorted(recall, points, side="left")
+        where = np.searchsorted(recall, np.linspace(0, 1, 101), side="left")
         out[t] = np.mean([precision[w] if w < len(precision) else 0.0 for w in where])
     return out
 
 
-def coco_map(dets: list, truth: list, classes: list[int]) -> dict[str, float]:
-    aps = [ap for c in classes if (ap := average_precision(dets, truth, c)) is not None]
+def coco_map(dets: list, truth: list, classes: list[int], area: tuple[float, float] | None = None) -> dict[str, float]:
+    aps = [ap for c in classes if (ap := average_precision(dets, truth, c, area)) is not None]
     if not aps:
         return {"map": float("nan"), "map50": float("nan"), "classes": 0}
     a = np.stack(aps)
     return {"map": float(a.mean()), "map50": float(a[:, 0].mean()), "classes": len(aps)}
 
 
-def scores_by_split(dets: list, truth: list, n_classes: int, seen: set[int]) -> dict[str, dict[str, float]]:
+def agnostic(dets: list, iou: float = 0.6) -> list:
+    """Detections with every class merged into one, after class-agnostic NMS."""
+    import torch
+    from torchvision.ops import nms
+
+    out = []
+    for boxes, scores, _ in dets:
+        keep = nms(torch.from_numpy(boxes).float(), torch.from_numpy(scores).float(), iou).numpy()
+        out.append((boxes[keep], scores[keep], np.zeros(len(keep), int)))
+    return out
+
+
+def evaluate(dets: list, truth: list, n_classes: int, seen: set[int]) -> dict[str, Any]:
+    """mAP for all, seen and unseen classes, by object size, and class-agnostic."""
     every = list(range(n_classes))
-    return {
+    out: dict[str, Any] = {
         "all": coco_map(dets, truth, every),
         "seen": coco_map(dets, truth, [c for c in every if c in seen]),
         "unseen": coco_map(dets, truth, [c for c in every if c not in seen]),
     }
+    for name, rng in AREAS.items():
+        out[name] = coco_map(dets, truth, every, rng)
+    out["agnostic"] = coco_map(agnostic(dets), [(b, np.zeros(len(b), int)) for b, _ in truth], [0])
+    return out
+
+
+def rescore(dets: list, factors: list[np.ndarray]) -> list:
+    """Scores times a per-image, per-class factor (e.g. presence); zero-factor detections dropped."""
+    out = []
+    for (b, s, lab), f in zip(dets, factors, strict=True):
+        w = f[lab] if len(lab) else np.zeros(0)
+        keep = w > 0
+        out.append((b[keep], (s * w)[keep], lab[keep]))
+    return out
 
 
 def reference(weights: str, images: list[PILImage.Image], device: str) -> tuple[list, float]:
@@ -487,20 +599,23 @@ def reference(weights: str, images: list[PILImage.Image], device: str) -> tuple[
 def markdown(report: dict[str, Any]) -> str:
     cfg = report["config"]
     head = (
-        f"**{cfg['model']}**, layers {cfg['layers']}: head trained on {report['train_images']} COCO train images "
+        f"**{cfg['model']}**, layers {cfg['layers']}: heads trained on {cfg['train_sizes']} COCO train images "
         f"({report['seen_classes']} classes; {report['classes'] - report['seen_classes']} held out), evaluated on "
-        f"{report['val_images']} val images at {cfg['max_side']} px."
+        f"{report['val_images']} val images at {cfg['max_side']} px. Cost: ms per image for all "
+        f"{report['classes']} classes; `GT presence` is an upper bound, not a detector."
     )
     lines = [
         head,
         "",
-        "| detector | mAP50-95 | mAP50 | mAP seen | mAP unseen | ms/image |",
-        "| --- | ---: | ---: | ---: | ---: | ---: |",
+        "| detector | mAP50-95 | mAP50 | seen | unseen | small | medium | large | agnostic mAP50 | ms/image |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for name, r in report["results"].items():
+        ms = r.get("ms")
         lines.append(
             f"| {name} | {r['all']['map']:.3f} | {r['all']['map50']:.3f} | {r['seen']['map']:.3f} "
-            f"| {r['unseen']['map']:.3f} | {r.get('ms', float('nan')):.0f} |"
+            f"| {r['unseen']['map']:.3f} | {r['small']['map']:.3f} | {r['medium']['map']:.3f} "
+            f"| {r['large']['map']:.3f} | {r['agnostic']['map50']:.3f} | {'-' if ms is None else f'{ms:.0f}'} |"
         )
     return "\n".join(lines)
 
@@ -510,16 +625,15 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     ap.add_argument("--model", default="qwen3-vl-4b", help="catalog name or local model folder (qwen_vl family)")
     ap.add_argument("--coco", default="datasets/coco", help="COCO root: annotations/ and train2017/, val2017/")
     ap.add_argument("--work", default="head_work", help="feature cache folder")
-    ap.add_argument("--train-images", type=int, default=4000)
+    ap.add_argument("--train-sizes", type=int, nargs="+", default=[4000], help="a head is trained per size")
     ap.add_argument("--val-images", type=int, default=500)
+    ap.add_argument("--queries", nargs="+", choices=["text", "image"], default=["text", "image"])
     ap.add_argument("--layers", type=int, nargs="+", default=[4, 20])
     ap.add_argument("--max-side", type=int, default=640)
-    ap.add_argument("--chunk", type=int, default=4, help="images per forward pass")
+    ap.add_argument("--chunk", type=int, default=8, help="prompts (or images) per forward pass")
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch", type=int, default=16)
-    ap.add_argument("--negatives", type=int, default=16, help="absent classes added per training batch")
-    ap.add_argument("--presence", action="store_true", help="also score head x the model's own Noul answer")
-    ap.add_argument("--presence-top", type=int, default=10, help="classes asked per image for --presence")
+    ap.add_argument("--negatives", type=int, default=8, help="absent classes per image (image) or batch (text)")
     ap.add_argument("--reference", nargs="*", default=[], help="Ultralytics weights to score on the same images")
     ap.add_argument("--device", default=None)
     ap.add_argument("--dtype", default=None)
@@ -547,79 +661,102 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     root, work = Path(args.coco), Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     fetch_annotations(root)
-    train, names = load_split(root, "train2017", args.train_images, args.seed)
+    sizes = sorted(set(args.train_sizes))
+    train, names = load_split(root, "train2017", sizes[-1], args.seed)
+    sizes = [n for n in sizes if n <= len(train)] or [len(train)]
     val, _ = load_split(root, "val2017", args.val_images, args.seed)
     t0 = time.perf_counter()
     fetch_images(train, "train2017")
     fetch_images(val, "val2017")
     print(f"{len(train)} train and {len(val)} val images ready, {time.perf_counter() - t0:.0f}s", flush=True)
     seen = [c for c in range(len(names)) if c % 4 != 3]
+    seen_set = set(seen)
+    everything = list(range(len(names)))
+    rng = random.Random(args.seed)
 
     extractor = Extractor(path, device, dtype, args.layers, args.chunk, args.max_side)
-    stores: dict[str, Store] = {}
-    fit_boxes: dict[str, list[np.ndarray]] = {}
+    train_store, val_store = Store(work / "train.f16", extractor.dim), Store(work / "val.f16", extractor.dim)
+    train_boxes: list[np.ndarray] = []
+    train_q: list[tuple[list[int], np.ndarray]] = []
+    val_boxes: list[np.ndarray] = []
+    val_q: list[np.ndarray] = []
+    val_presence: list[np.ndarray] = []
     val_images: list[PILImage.Image] = []
-    extract_ms: dict[str, float] = {}
     try:
-        queries = extractor.queries(names)
-        for split, items in (("train", train), ("val", val)):
-            store, fit_boxes[split], spent = Store(work / f"{split}.f16", extractor.dim), [], 0.0
-            for start in range(0, len(items), 64):
-                pairs = [fitted(it, args.max_side) for it in items[start : start + 64]]
-                t1 = time.perf_counter()
-                rows = extractor.patches([im for im, _ in pairs])
-                spent += time.perf_counter() - t1
-                for (image, b), r in zip(pairs, rows, strict=True):
-                    store.append(r, (image.size[1] // STRIDE, image.size[0] // STRIDE))
-                    fit_boxes[split].append(b)
-                if split == "val":
-                    val_images += [im for im, _ in pairs]
-                print(f"{split}: {start + len(pairs)}/{len(items)} images, {spent:.0f}s in the model", flush=True)
-            store.finish()
-            stores[split] = store
-            extract_ms[split] = spent * 1000 / len(items)
-
-        head = train_head(
-            stores["train"],
-            fit_boxes["train"],
-            [it.labels for it in train],
-            queries,
-            seen,
-            device,
-            args.epochs,
-            args.batch,
-            args.negatives,
-            args.seed,
-        )
-        truth = [(b, it.labels) for b, it in zip(fit_boxes["val"], val, strict=True)]
+        text_q = extractor.queries(names)
         t0 = time.perf_counter()
-        dets = [detect(head, stores["val"], i, queries, device) for i in range(len(val))]
-        head_ms = (time.perf_counter() - t0) * 1000 / len(val)
-        results: dict[str, dict[str, Any]] = {
-            "head": {**scores_by_split(dets, truth, len(names), set(seen)), "ms": extract_ms["val"] + head_ms}
-        }
-        if args.presence:
-            t0 = time.perf_counter()
-            gated = []
-            for image, (b, s, lab) in zip(val_images, dets, strict=True):
-                best: dict[int, float] = {}
-                for c, v in zip(lab.tolist(), s.tolist(), strict=True):
-                    best[c] = max(best.get(c, 0.0), v)
-                ask = sorted(best, key=lambda c: -best[c])[: args.presence_top]
-                p = dict(zip(ask, extractor.presence(image, ask, names).tolist(), strict=True)) if ask else {}
-                factor = np.array([p.get(c, 0.0) for c in lab.tolist()])
-                keep = factor > 0
-                gated.append((b[keep], (s * factor)[keep], lab[keep]))
-            presence_ms = (time.perf_counter() - t0) * 1000 / len(val)
-            results["head x presence"] = {
-                **scores_by_split(gated, truth, len(names), set(seen)),
-                "ms": extract_ms["val"] + head_ms + presence_ms,
-            }
+        for start in range(0, len(train), 64):
+            pairs = [fitted(it, args.max_side) for it in train[start : start + 64]]
+            if "image" in args.queries:  # the decision pass gives patches and image queries together
+                for (image, b), it in zip(pairs, train[start : start + 64], strict=True):
+                    present = sorted({int(c) for c in it.labels if c in seen_set})
+                    absent = [c for c in seen if c not in present]
+                    asked = present + rng.sample(absent, min(args.negatives, len(absent)))
+                    rows, states, _ = extractor.decide(image, asked, names)
+                    train_store.append(rows, (image.size[1] // STRIDE, image.size[0] // STRIDE))
+                    train_q.append((asked, states))
+                    train_boxes.append(b)
+            else:
+                for (image, b), rows in zip(pairs, extractor.patches([im for im, _ in pairs]), strict=True):
+                    train_store.append(rows, (image.size[1] // STRIDE, image.size[0] // STRIDE))
+                    train_boxes.append(b)
+            print(f"train: {start + len(pairs)}/{len(train)} images, {time.perf_counter() - t0:.0f}s", flush=True)
+        train_store.finish()
+        # val: every class asked with the image (presence and image queries for all classes)
+        t0 = time.perf_counter()
+        for k, it in enumerate(val):
+            image, b = fitted(it, args.max_side)
+            rows, states, presence = extractor.decide(image, everything, names)
+            val_store.append(rows, (image.size[1] // STRIDE, image.size[0] // STRIDE))
+            val_boxes.append(b)
+            val_q.append(states.astype(np.float32))
+            val_presence.append(presence)
+            val_images.append(image)
+            if k % 50 == 0:
+                print(f"val: {k + 1}/{len(val)} images, {time.perf_counter() - t0:.0f}s", flush=True)
+        decide_ms = (time.perf_counter() - t0) * 1000 / len(val)
+        val_store.finish()
+        probe = val_images[: min(32, len(val_images))]
+        t0 = time.perf_counter()
+        extractor.patches(probe)
+        patch_ms = (time.perf_counter() - t0) * 1000 / len(probe)
     finally:
         extractor.close()
+
+    truth = [(b, it.labels) for b, it in zip(val_boxes, val, strict=True)]
+    gt_presence = [np.isin(everything, it.labels).astype(np.float32) for it in val]
+    labels = [it.labels for it in train]
+    results: dict[str, dict[str, Any]] = {}
+    for mode in args.queries:
+        for n in sizes:
+            print(f"training: {mode} queries, {n} images", flush=True)
+            head = train_head(
+                train_store,
+                train_boxes[:n],
+                labels[:n],
+                text_q,
+                seen,
+                device,
+                args.epochs,
+                args.batch,
+                args.negatives,
+                args.seed,
+                image_queries=train_q[:n] if mode == "image" else None,
+            )
+            t0 = time.perf_counter()
+            dets = [detect(head, val_store, i, text_q if mode == "text" else val_q[i], device) for i in range(len(val))]
+            head_ms = (time.perf_counter() - t0) * 1000 / len(val)
+            base = (patch_ms if mode == "text" else decide_ms) + head_ms
+            name = f"{mode} query, {n} images"
+            results[name] = {**evaluate(dets, truth, len(names), seen_set), "ms": base}
+            results[f"{name} x presence"] = {
+                **evaluate(rescore(dets, val_presence), truth, len(names), seen_set),
+                "ms": base + (decide_ms if mode == "text" else 0.0),
+            }
+            results[f"{name} x GT presence"] = {**evaluate(rescore(dets, gt_presence), truth, len(names), seen_set)}
     for weights in args.reference:
         ref, ms = reference(weights, val_images, device)
-        results[weights] = {**scores_by_split(ref, truth, len(names), set(seen)), "ms": ms}
+        results[weights] = {**evaluate(ref, truth, len(names), seen_set), "ms": ms}
 
     report = {
         "results": results,
@@ -627,7 +764,8 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         "val_images": len(val),
         "seen_classes": len(seen),
         "classes": len(names),
-        "config": {k: v for k, v in vars(args).items()} | {"device": device, "dtype": dtype},
+        "cost_ms": {"patch_pass": patch_ms, "decision_pass_all_classes": decide_ms},
+        "config": {k: v for k, v in vars(args).items()} | {"device": device, "dtype": dtype, "train_sizes": sizes},
         "gpu": torch.cuda.get_device_name() if device.startswith("cuda") else device,
     }
     print(markdown(report))
