@@ -96,7 +96,35 @@ def test_load_split(tmp_path: Path) -> None:
     assert all(len(it.boxes) == 2 for it in items)  # crowd boxes dropped
     assert items[0].boxes[0, 2] - items[0].boxes[0, 0] == 96
     train, _ = ph.load_split(root, "train2017", 4, 0)
-    assert len(train) == 4 and train == sorted(train, key=lambda it: it.id)
+    again, _ = ph.load_split(root, "train2017", 4, 0)
+    assert len(train) == 4 and [it.id for it in train] == [it.id for it in again]  # seeded, random order
+
+
+def test_average_precision_by_area() -> None:
+    """COCO area rules: out-of-range ground truth and unmatched out-of-range detections are ignored."""
+    small, large = np.array([[0, 0, 20, 20]], np.float32), np.array([[100, 100, 300, 300]], np.float32)
+    truth = [(np.concatenate([small, large]), np.array([0, 0]))]
+    found_large = [(large, np.array([0.9]), np.array([0]))]
+    assert ph.average_precision(found_large, truth, 0, ph.AREAS["large"]).tolist() == [1.0] * 10
+    assert ph.average_precision(found_large, truth, 0, ph.AREAS["small"]).tolist() == [0.0] * 10
+    assert ph.average_precision(found_large, truth, 0, ph.AREAS["medium"]) is None  # nothing medium
+    assert ph.average_precision(found_large, truth, 0)[0] == pytest.approx(51 / 101)  # recall 0.5: 51 of 101 points
+    # a stray large false positive does not hurt the small range
+    both = [
+        (np.concatenate([np.array([[400, 0, 600, 200]], np.float32), small]), np.array([0.9, 0.8]), np.array([0, 0]))
+    ]
+    assert ph.average_precision(both, truth, 0, ph.AREAS["small"]).tolist() == [1.0] * 10
+
+
+def test_agnostic_and_rescore() -> None:
+    # the same object found as class 0 and class 1: one box after class-agnostic NMS
+    dets = [(np.array([[10, 10, 50, 50], [11, 10, 50, 50]], np.float32), np.array([0.9, 0.7]), np.array([0, 1]))]
+    merged = ph.agnostic(dets)
+    assert len(merged[0][0]) == 1 and merged[0][2].tolist() == [0]
+    truth = [(BOX, np.array([1]))]
+    assert ph.evaluate(dets, truth, 2, {0})["agnostic"]["map"] == 1.0
+    gated = ph.rescore(dets, [np.array([0.0, 0.5])])  # class 0 judged absent
+    assert gated[0][2].tolist() == [1] and gated[0][1].tolist() == pytest.approx([0.35])
 
 
 @pytest.mark.network
@@ -106,17 +134,26 @@ def test_end_to_end_tiny_model(tiny_qwen: str, tmp_path: Path) -> None:  # noqa:
     report = ph.main(
         [
             *("--model", tiny_qwen, "--coco", str(root), "--work", str(tmp_path / "work")),
-            *("--train-images", "6", "--val-images", "4", "--layers", "1", "2", "--chunk", "2"),
-            *("--epochs", "2", "--batch", "3", "--negatives", "2", "--presence", "--presence-top", "2"),
+            *("--train-sizes", "3", "6", "--val-images", "4", "--layers", "1", "2", "--chunk", "3"),
+            *("--epochs", "2", "--batch", "3", "--negatives", "2", "--reference"),
             *("--device", "cpu", "--dtype", "fp32", "--out", str(out)),
         ]
     )
-    assert set(report["results"]) == {"head", "head x presence"}
+    expected = {
+        f"{mode} query, {n} images{suffix}"
+        for mode in ("text", "image")
+        for n in (3, 6)
+        for suffix in ("", " x presence", " x GT presence")
+    }
+    assert set(report["results"]) == expected
     for r in report["results"].values():
-        assert 0.0 <= r["all"]["map"] <= 1.0
+        for key in ("all", "small", "medium", "large", "agnostic"):
+            assert np.isnan(r[key]["map"]) or 0.0 <= r[key]["map"] <= 1.0
         assert r["seen"]["classes"] + r["unseen"]["classes"] == r["all"]["classes"]
+    assert "ms" not in report["results"]["image query, 6 images x GT presence"]  # an upper bound, not a detector
     assert report["seen_classes"] == 3 and report["classes"] == 4  # class index 3 is held out
-    assert out.exists() and "| head |" in ph.markdown(report)
+    assert set(report["cost_ms"]) == {"patch_pass", "decision_pass_all_classes"}
+    assert out.exists() and "| image query, 6 images |" in ph.markdown(report)
 
 
 @pytest.mark.slow
