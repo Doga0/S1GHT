@@ -17,6 +17,8 @@ which is compared with the class's COCO masks:
 - `bilinear`: a low-rank probe (A·patch)·(B·query) + w·patch, trained on half the images and
   on 3/4 of the classes; reported separately for seen and held-out ("unseen") classes.
 - `tiles_N`: S1GHT's black-box baseline, N×N crops each asked the same Noul.
+- `oracle`: the class's own mask coverage. Its boxes are the ceiling of the box extraction
+  (threshold + connected components on 32 px patches), not of the model.
 
 The decision token sits after the image, and attention is causal, so patch states never see
 the question: any query dependence comes from the query vector. Every method and layer gets a
@@ -504,17 +506,22 @@ def evaluate(
             boxes_by.setdefault(name, {})[layer] = {"pairs": c["pairs"]}
         print(f"layer {layer}: {time.perf_counter() - t0:.0f}s", flush=True)
 
-    # tiles are layer-free
-    for n in sorted({n for rd in readings for n in rd.tiles}):
-        name = f"tiles_{n}"
-        c = {"train": [], "test": [], "pairs": []}
+    # layer-free maps: tiles, and the oracle (the class's own mask coverage), whose boxes are the
+    # ceiling of thresholding + connected components on 32 px patches
+    free: dict[str, Any] = {
+        f"tiles_{n}": (lambda rd, s, ci, n=n: rd.tiles[n][ci]) for n in sorted({n for rd in readings for n in rd.tiles})
+    }
+    free["oracle"] = lambda rd, s, ci: coverage(s.masks[rd.classes[ci]], rd.grid)
+    for name, get in free.items():
+        c: dict[str, list] = {"train": [], "test": [], "pairs": []}
         for i, (rd, s) in enumerate(zip(readings, samples, strict=True)):
             for ci, y in enumerate(pair_labels(rd, s)):
                 if y is None:
                     continue
                 key = "train" if split[i] else "test"
-                c[key].append(auc(rd.tiles[n][ci], y))
-                c["pairs"].append((key, rd.tiles[n][ci], rd.grid, s.boxes[rd.classes[ci]]))
+                m = get(rd, s, ci)
+                c[key].append(auc(m, y))
+                c["pairs"].append((key, m, rd.grid, s.boxes[rd.classes[ci]]))
         results[name] = {
             -1: {
                 "train_auc": float(np.nanmean(c["train"])),
