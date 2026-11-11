@@ -157,3 +157,52 @@ def test_tiny_model_end_to_end(tiny_qwen: str, tmp_path: Path) -> None:  # noqa:
     regions = report["models"]["tiny"]["regions"]
     assert set(regions) == set(rq.REGION_METHODS)  # crops: 16 images in one request
     assert all(0.0 <= m["occupancy"]["accuracy"] <= 1.0 for m in regions.values())
+
+
+def test_strip_truth_is_occupancy_of_the_framed_region() -> None:
+    # yes to "any part inside the rectangle" exactly when the edge is not past the line
+    for i, sc in enumerate(scenes()):
+        for probe in rq.sample_lines(sc, i):
+            x0, y0, x1, y1 = rq.strip_rect(sc, probe, 8)
+            mask = next(s for s in sc.shapes if s.name == probe.shape).mask
+            assert mask[y0:y1, x0:x1].any() == (not probe.truth), probe
+    sc = scenes(1)[0]
+    probe = rq.LineProbe(0, sc.shapes[0].name, "left", 0.05, 0.25, False)
+    state, text = rq.line_request("strip", sc, probe, 8)
+    assert "inside the red rectangle" in text
+    x0, y0, x1, y1 = rq.strip_rect(sc, probe, 8)
+    assert x0 == 0 and x1 == 64 and (np.asarray(state["photo"])[y0, x0:x1] == rq.MARK).all()
+
+
+def test_presence_probes() -> None:
+    sc = scenes(1)[0]
+    asked = rq.sample_presence(sc, 0, random.Random(0))
+    present = {s.name for s in sc.shapes}
+    assert {n for _, n, t in asked if t} == present
+    assert sum(not t for _, _, t in asked) == len(present) and not {n for _, n, t in asked if not t} & present
+
+
+def test_strip_answers_are_flipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip questions answered from the pixels: after the flip, the edge metrics are perfect."""
+    rng = random.Random(0)
+    sc = [rq.make_scene(rng, 128) for _ in range(2)]
+
+    def oracle(model: Any, requests: list[tuple[dict[str, Any], str]], batch: int) -> tuple[np.ndarray, float]:
+        out = np.zeros(len(requests))
+        for n, (state, text) in enumerate(requests):
+            if "red rectangle" not in text:
+                continue
+            image = np.asarray(state["photo"])
+            red = (image == rq.MARK).all(-1)
+            ys, xs = np.nonzero(red)
+            scene = next(s for s in sc if np.array_equal(np.asarray(s.image)[~red], image[~red]))
+            name = text.split("part of the ")[1].split(" lie")[0]
+            mask = next(s for s in scene.shapes if s.name == name).mask
+            out[n] = float(mask[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1].any())
+        return out, 0.0
+
+    monkeypatch.setattr(rq, "ask_all", oracle)
+    report = rq.main(["--images", "2", "--size", "128", "--methods", "--line-methods", "strip"], models={"o": Stub()})
+    strip = report["models"]["o"]["lines"]["strip"]
+    assert strip["auc"] == 1.0 and strip["edge_error"] < 0.01
+    assert report["models"]["o"]["presence"]["n"] > 0 and report["models"]["o"]["regions"] == {}
