@@ -23,6 +23,9 @@ Designs (`--designs`, G = grid side, a power of 2; cells split the image G x G):
   ("is its left edge right of this line?") at 2^B - 1 lines across the edge cell. The object is
   named by its seed cell; the answer is about the largest object with its center there (the
   2nd largest for a cell's 2nd seed ...).
+- `+bBw`: as `+bB`, with the lines spread over the edge cell and its outer neighbour. Under
+  `--min-cover` a true edge can lie in a sliver cell outside the decoded box, which `+bB`
+  clamps; `w` finds it, at half the resolution per bit.
 - `boxes`: the ground truth itself (sanity check, mAP 1).
 
 Every class's presence is asked first (80 Nouls) and taken as perfect, so absent classes give
@@ -66,6 +69,7 @@ DEFAULT_DESIGNS = [
     "score4", "score8", "score16",
     "center8", "center16", "count8", "count16",
     "count8+b2", "count8+b3", "count16+b2", "count16+b3",
+    "count8+b3w", "count8+b4w", "count16+b3w", "count16+b4w",
 ]  # fmt: skip
 
 
@@ -242,22 +246,28 @@ def fit_box(
     return np.array([cand_x[0][bx], cand_y[0][by], cand_x[1][bx], cand_y[1][by]])
 
 
-def refine(box: np.ndarray, target: np.ndarray | None, xs: np.ndarray, ys: np.ndarray, bits: int) -> np.ndarray:
-    """Each edge moved inside its edge cell by 2^bits - 1 perfect threshold answers about `target`.
+def refine(
+    box: np.ndarray, target: np.ndarray | None, xs: np.ndarray, ys: np.ndarray, bits: int, wide: bool = False
+) -> np.ndarray:
+    """Each edge moved by 2^bits - 1 perfect threshold answers about `target`.
 
-    The answers ("is the edge past line k?") give the count of lines the true edge passes; the
-    edge goes to the middle of that bracket. A true edge outside the cell clamps to the cell.
+    The lines span the edge cell (inside the box), and with `wide` its outer neighbour too. The
+    answers ("is the edge past line k?") give the count of lines the true edge passes; the edge
+    goes to the middle of that bracket. A true edge outside the span clamps to it.
     """
     if target is None:
         return box
     out = box.copy()
-    n = 2**bits
+    n, last = 2**bits, len(xs) - 1
     for side, (e, inward) in enumerate(((xs, 1), (ys, 1), (xs, -1), (ys, -1))):
         k = int(np.searchsorted(e, box[side]))  # box edges lie on cell edges
-        lo, hi = (e[k], e[min(k + 1, len(e) - 1)]) if inward > 0 else (e[max(k - 1, 0)], e[k])
+        inner, outer = min(max(k + inward, 0), last), min(max(k - inward, 0), last) if wide else k
+        lo, hi = sorted((e[inner], e[outer]))
         lines = lo + (hi - lo) * np.arange(1, n) / n
         passed = int((target[side] > lines).sum())
         out[side] = lo + (hi - lo) * (passed + 0.5) / n
+    if out[2] <= out[0] or out[3] <= out[1]:
+        return box  # edges crossed: keep the cells
     return out
 
 
@@ -270,20 +280,21 @@ class Design:
     kind: str  # occ, score, center, count, boxes
     grid: int = 0
     bits: int = 0  # boundary questions per edge: 2^bits - 1 lines (0: none)
+    wide: bool = False  # the lines also cover the cell outside the edge
 
 
 def parse_design(name: str) -> Design:
     if name == "boxes":
         return Design(name, "boxes")
-    m = re.fullmatch(r"(occ|score|center|count)(\d+)(?:\+b(\d+))?", name)
+    m = re.fullmatch(r"(occ|score|center|count)(\d+)(?:\+b(\d+)(w?))?", name)
     if m is None:
-        raise ValueError(f"{name}: expected occG, scoreG, centerG, countG (+bB for the last two) or boxes")
-    kind, g, bits = m.group(1), int(m.group(2)), int(m.group(3) or 0)
+        raise ValueError(f"{name}: expected occG, scoreG, centerG, countG (+bB or +bBw for the last two) or boxes")
+    kind, g, bits, wide = m.group(1), int(m.group(2)), int(m.group(3) or 0), m.group(4) == "w"
     if g < 2 or g & (g - 1):
         raise ValueError(f"{name}: the grid side must be a power of 2 (2, 4, 8 ...)")
     if bits and kind not in ("center", "count"):
         raise ValueError(f"{name}: boundary questions need objects named by a center cell (center/count)")
-    return Design(name, kind, g, bits)
+    return Design(name, kind, g, bits, wide)
 
 
 def coarse_to_fine(oracle: Oracle, g: int) -> int:
@@ -324,7 +335,7 @@ def decode(design: Design, oracle: Oracle) -> tuple[list[np.ndarray], int]:
             for k in range(int(counts[seed])):  # a 2+ count: same cells, k-th object for boundaries
                 box = cell_box(part, xs, ys)
                 if design.bits:
-                    box = refine(box, oracle.seeded(g, seed, k), xs, ys, design.bits)
+                    box = refine(box, oracle.seeded(g, seed, k), xs, ys, design.bits, design.wide)
                 boxes.append(box)
     adaptive += len(boxes) * 4 * design.bits
     return boxes, adaptive

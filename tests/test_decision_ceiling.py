@@ -87,9 +87,23 @@ def test_boundary_refinement() -> None:
     assert iou(coarse, box) < 0.7
 
 
+def test_wide_boundary_finds_edges_outside_the_cells() -> None:
+    # min cover 0.6: the box covers only 7 of column 3's 32 px, so the cells stop at x = 96
+    box = np.array([33, 33, 103, 95])
+    o = dc.Oracle(box[None], 128, 128, 0.6)
+    inner = dc.decode(dc.parse_design("center4+b3"), o)[0][0]
+    wide = dc.decode(dc.parse_design("center4+b4w"), o)[0][0]
+    assert inner[2] < 96 and abs(wide[2] - 103) <= 2  # inner clamps inside the cell, wide finds it
+    assert iou(wide, box) > iou(inner, box)
+    # without slivers wide spends half its resolution outside: within one bracket of 64 / 16 px
+    o0 = dc.Oracle(box[None], 128, 128)
+    assert np.abs(dc.decode(dc.parse_design("center4+b4w"), o0)[0][0] - box).max() <= 2
+
+
 def test_parse_design() -> None:
     assert dc.parse_design("count16+b3") == dc.Design("count16+b3", "count", 16, 3)
-    for bad in ("occ6", "occ8+b2", "grid8", "center1"):
+    assert dc.parse_design("count8+b4w") == dc.Design("count8+b4w", "count", 8, 4, True)
+    for bad in ("occ6", "occ8+b2", "grid8", "center1", "count8+w"):
         with pytest.raises(ValueError):
             dc.parse_design(bad)
 
