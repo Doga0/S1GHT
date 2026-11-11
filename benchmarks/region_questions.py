@@ -2,6 +2,7 @@
 
     python benchmarks/region_questions.py --models qwen3-vl-4b d1-omni-600m --device cuda --out e1.json
     python benchmarks/region_questions.py --images 50 --grid 4 --methods grid crop
+    python benchmarks/region_questions.py --methods --line-methods line strip  # E1b
 
 E0 (`decision_ceiling.py`) showed what decision-space detection can reach with perfect answers:
 an 8x8 grid of cell questions, then threshold questions about each object's edges, reaches
@@ -27,7 +28,17 @@ Boundary questions, for a side of the object and a line at a known offset from i
 ("Is the whole {class} to the right of {line}?"; also left of, above, below):
 - `text`: the line as a share of the image ("the vertical line at 0.40 of the width").
 - `line`: the line drawn in red on its own copy of the image.
+- `strip` (E1b): no line; the region beyond it is framed in red, across the object's band (the
+  rows, or columns, of its occupied `--grid` cells, as a decoder would know them), and the
+  question is an occupancy one: "Does any part of the {class} lie inside the red rectangle?"
+  Yes means the object reaches past the line, the opposite of the other methods, so its P(yes)
+  is flipped before scoring. E1 found occupancy of a framed region answered at AUC 0.99 and the
+  line questions at 0.72; this asks for the same edge in the form that works.
 Offsets: +-0.02, 0.05, 0.1, 0.2 of the image side.
+
+Presence (E1b, unless `--no-presence`): "Is there a {class} in `photo`?" for every class present
+and as many absent ones, on the whole image. It tells a model that cannot see the shapes apart
+from one that cannot place them.
 
 Reported per model and method: AUC of P(yes); AUC against neighbouring cells only (the hard
 negatives a decoder must reject); recall at 0.5 by how much of the cell the shape covers; for
@@ -67,7 +78,8 @@ SIDES = {  # side -> (question wording, box index, sign: True when edge > line)
     "bottom": ("above", 3, False),
 }
 REGION_METHODS = ("text", "grid", "mark", "crop", "crops")
-LINE_METHODS = ("text", "line")
+LINE_METHODS = ("text", "line", "strip")
+FLIPPED = {"strip"}  # methods whose yes means the edge is NOT past the line
 
 
 # --- synthetic scenes -------------------------------------------------------------------------
@@ -243,6 +255,13 @@ def sample_lines(scene: Scene, index: int) -> list[LineProbe]:
     return out
 
 
+def sample_presence(scene: Scene, index: int, rng: random.Random) -> list[tuple[int, str, bool]]:
+    """(scene, class, present) for every present class and as many absent ones."""
+    present = [s.name for s in scene.shapes]
+    absent = [f"{c} {s}" for c in COLORS for s in SHAPES if f"{c} {s}" not in present]
+    return [(index, n, True) for n in present] + [(index, n, False) for n in rng.sample(absent, len(present))]
+
+
 # --- prompts ----------------------------------------------------------------------------------
 
 
@@ -315,9 +334,32 @@ def crop(image: PILImage.Image, cell: tuple[int, int], g: int, side: int) -> PIL
     return image.crop((xs[c], ys[r], xs[c + 1], ys[r + 1])).resize((side, side), PILImage.Resampling.BICUBIC)
 
 
-def line_request(method: str, scene: Scene, probe: LineProbe) -> tuple[dict[str, Any], str]:
+def strip_rect(scene: Scene, probe: LineProbe, g: int) -> tuple[int, int, int, int]:
+    """The region beyond the line (toward the image border the side faces), across the object's
+    band: the rows (vertical line) or columns (horizontal line) of its occupied cells."""
+    w, h = scene.image.size
+    _, k, _ = SIDES[probe.side]
+    shape = next(s for s in scene.shapes if s.name == probe.shape)
+    occ = np.argwhere(coverage(shape.mask, g) > 0)
+    (r0, c0), (r1, c1) = occ.min(0), occ.max(0)
+    xs, ys = cell_edges(w, g), cell_edges(h, g)
+    if k % 2 == 0:  # left/right: a vertical line at x
+        x = round(probe.at * w)
+        x0, x1 = (0, x) if k == 0 else (x, w)
+        return int(x0), int(ys[r0]), int(x1), int(ys[r1 + 1])
+    y = round(probe.at * h)
+    y0, y1 = (0, y) if k == 1 else (y, h)
+    return int(xs[c0]), int(y0), int(xs[c1 + 1]), int(y1)
+
+
+def line_request(method: str, scene: Scene, probe: LineProbe, g: int = 8) -> tuple[dict[str, Any], str]:
     words, k, _ = SIDES[probe.side]
     vertical = k % 2 == 0
+    if method == "strip":
+        x0, y0, x1, y1 = strip_rect(scene, probe, g)
+        marked = scene.image.copy()
+        ImageDraw.Draw(marked).rectangle((x0, y0, x1 - 1, y1 - 1), outline=MARK, width=3)
+        return {"photo": marked}, f"Does any part of the {probe.shape} lie inside the red rectangle in `photo`?"
     if method == "text":
         where = (
             f"the vertical line at {probe.at:.2f} of the width of `photo` (0 is the left edge)"
@@ -472,12 +514,23 @@ def run_model(model: Any, scenes: list[Scene], args: argparse.Namespace) -> dict
     probes = [pr for i, sc in enumerate(scenes) for pr in sample_cells(sc, i, args.grid, args.cells, rng)]
     lines = [pr for i, sc in enumerate(scenes) for pr in sample_lines(sc, i)]
     report: dict[str, Any] = {
+        "presence": {},
         "regions": {},
         "lines": {},
         "probes": len(probes),
         "line_probes": len(lines),
         "errors": {},
     }
+    if args.presence:
+        asked = [q for i, sc in enumerate(scenes) for q in sample_presence(sc, i, rng)]
+        states: dict[int, dict[str, Any]] = {}
+        requests = [
+            (states.setdefault(i, {"photo": scenes[i].image}), f"Is there a {name} in `photo`?") for i, name, _ in asked
+        ]
+        p, ms = ask_all(model, requests, args.batch)
+        t = np.array([present for _, _, present in asked])
+        report["presence"] = {"auc": auc(p, t), "accuracy": float(((p > 0.5) == t).mean()), "n": len(asked), "ms": ms}
+        print(f"{model.name} presence: {json.dumps(report['presence'])}", flush=True)
     for method in args.methods:
         if method == "crops" and args.grid > 4:
             print(f"skipping crops: {args.grid}x{args.grid} is too many images per request", flush=True)
@@ -501,7 +554,7 @@ def run_model(model: Any, scenes: list[Scene], args: argparse.Namespace) -> dict
         shared = {}
         requests = []
         for pr in lines:
-            state, text = line_request(method, scenes[pr.scene], pr)
+            state, text = line_request(method, scenes[pr.scene], pr, args.grid)
             if method == "text":
                 state = shared.setdefault((pr.scene, method), state)
             requests.append((state, text))
@@ -511,6 +564,8 @@ def run_model(model: Any, scenes: list[Scene], args: argparse.Namespace) -> dict
             report["errors"][f"line {method}"] = f"{type(e).__name__}: {e}"
             print(f"{model.name} lines {method}: failed, {report['errors'][f'line {method}']}", flush=True)
             continue
+        if method in FLIPPED:
+            p = 1.0 - p
         report["lines"][method] = line_metrics(lines, scenes, p, ms)
         print(f"{model.name} lines {method}: {json.dumps(report['lines'][method])}", flush=True)
     return report
@@ -518,9 +573,15 @@ def run_model(model: Any, scenes: list[Scene], args: argparse.Namespace) -> dict
 
 def markdown(report: dict[str, Any]) -> str:
     g = report["grid"]
-    out = [
-        f"E1 region questions: {report['images']} synthetic images, {g}x{g} grid",
-        "",
+    out = [f"E1 region questions: {report['images']} synthetic images, {g}x{g} grid", ""]
+    if any(r["presence"] for r in report["models"].values()):
+        out += ["| model | presence AUC | accuracy | ms/question |", "| --- | ---: | ---: | ---: |"]
+        for name, r in report["models"].items():
+            if r["presence"]:
+                pr = r["presence"]
+                out.append(f"| {name} | {pr['auc']:.3f} | {pr['accuracy']:.2f} | {pr['ms']:.0f} |")
+        out.append("")
+    out += [
         (
             "| model | naming | occupancy AUC | vs neighbours | recall cover <=0.1 / <=0.5 / >0.5 "
             "| center AUC | vs neighbours | ms/question |"
@@ -561,8 +622,9 @@ def main(argv: list[str] | None = None, models: dict[str, Any] | None = None) ->
     ap.add_argument("--size", type=int, default=448, help="synthetic image side (px)")
     ap.add_argument("--grid", type=int, default=8)
     ap.add_argument("--cells", type=int, default=12, help="occupancy probes per (image, shape)")
-    ap.add_argument("--methods", nargs="+", choices=REGION_METHODS, default=["text", "grid", "mark", "crop"])
+    ap.add_argument("--methods", nargs="*", choices=REGION_METHODS, default=["text", "grid", "mark", "crop"])
     ap.add_argument("--line-methods", nargs="*", choices=LINE_METHODS, default=list(LINE_METHODS))
+    ap.add_argument("--no-presence", dest="presence", action="store_false", help="skip whole-image presence")
     ap.add_argument("--crop-side", type=int, default=224)
     ap.add_argument("--batch", type=int, default=16, help="requests per runtime call, questions per request")
     ap.add_argument("--device", default=None)
