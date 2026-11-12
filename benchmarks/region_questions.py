@@ -441,8 +441,8 @@ def isotonic(y: np.ndarray, increasing: bool = True) -> np.ndarray:
     return out if increasing else -out
 
 
-def edge_estimate(at: np.ndarray, p: np.ndarray, beyond: bool) -> float:
-    """Where a side's monotone P(yes) crosses 0.5 along the line position.
+def edge_estimate(at: np.ndarray, p: np.ndarray, beyond: bool, level: float = 0.5) -> float:
+    """Where a side's monotone P(yes) crosses `level` along the line position.
 
     `beyond` (left, top): yes means the edge is past the line, so P(yes) falls as the line moves on.
     """
@@ -450,8 +450,8 @@ def edge_estimate(at: np.ndarray, p: np.ndarray, beyond: bool) -> float:
     a, q = at[order], isotonic(p[order], increasing=not beyond)
     falling = q if beyond else q[::-1]
     pos = a if beyond else a[::-1]
-    # first line where the (falling) answer drops below 0.5: the edge is between it and the previous
-    below = np.nonzero(falling < 0.5)[0]
+    # first line where the (falling) answer drops below `level`: the edge is between it and the previous
+    below = np.nonzero(falling < level)[0]
     if len(below) == 0:
         return float(pos[-1])
     i = int(below[0])

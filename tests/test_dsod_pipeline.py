@@ -104,11 +104,51 @@ def test_asker_groups_and_caches() -> None:
 def test_main_with_stub(tmp_path: Path) -> None:
     stub = Stub()
     out = tmp_path / "e2.json"
-    report = dp.main(["--images", "2", "--size", "128", "--grid", "4", "--bits", "1", "--out", str(out)], model=stub)
-    assert set(report["configs"]) == set(dp.CONFIGS)
-    assert report["configs"]["oracle"]["questions"] == 0 and report["configs"]["model"]["questions"] > 0
+    report = dp.main(["--images", "4", "--size", "128", "--grid", "4", "--bits", "1", "--out", str(out)], model=stub)
+    rows = report["configs"]
+    assert {"model [strip]", "model [near]", "oracle objects, model edges [near]", "model, no edges"} <= set(rows)
+    assert rows["oracle"]["questions"] == 0 and rows["model [strip]"]["questions"] > 0
+    assert 0.05 <= rows["model [near]"]["calibrated"]["level"] <= 0.95
     assert stub.questions <= sum(r["questions"] for r in report["configs"].values()) * 2  # shared, cached
     assert out.exists()
+
+
+def test_near_regions_and_zoom() -> None:
+    box = np.array([56, 112, 168, 224])
+    assert dp.edge_region("near", box, 0, 60, 448, 448, 56) == (4, 112, 60, 224)
+    assert dp.edge_region("near", box, 2, 160, 448, 448, 56) == (160, 112, 216, 224)
+    assert dp.edge_region("near", box, 1, 30, 448, 448, 56) == (56, 0, 168, 30)  # clipped at the border
+    assert dp.edge_region("strip", box, 3, 220, 448, 448, 56) == dp.strip(box, 3, 220, 448, 448)
+    image = dp.make_scenes(1, 448, 0)[0].image
+    assert dp.zoom(image, (0, 0, 56, 112), 224).size == (224, 448)
+    assert dp.zoom(image, (0, 0, 20, 400), 224).size == (22, 448)  # the longer side capped at 2x
+
+
+def test_oracle_edges_agree_across_regions() -> None:
+    for sc in dp.make_scenes(5, 448, 2):
+        oracle = dp.Oracle(sc, 8)
+        src = {stage: oracle for stage in dp.STAGES}
+        a = dp.finish(dp.decode(sc, src, 8, 3, "strip"))[0]
+        b = dp.finish(dp.decode(sc, src, 8, 3, "near"))[0]
+        assert np.array_equal(a, b)
+
+
+def test_edge_stats_and_level() -> None:
+    scenes = dp.make_scenes(8, 448, 4)
+    found = []
+    for sc in scenes:
+        oracle = dp.Oracle(sc, 8)
+        found.append(dp.decode(sc, {stage: oracle for stage in dp.STAGES}, 8, 3, "near"))
+    stats = dp.edge_stats(found, scenes, 8)
+    assert stats["objects"] == sum(len(sc.shapes) for sc in scenes)
+    assert stats["abs_px"] <= 2 * 56 / 8 / 2 + 1  # within half a bracket
+    for b in stats["curve"]:  # perfect answers: the yes rate is the truth's
+        assert b["p_yes"] == b["truth"]
+    assert all(b["truth"] == (b["from"] > 0) for b in stats["curve"] if b["from"] != 0)  # a line on the edge: no
+    # a model that misses slivers: answers yes only well past the edge; a lower level reads it back
+    f = found[0][0]
+    biased = dp.Found(f.cls, f.box, f.score, f.spans, f.lines, f.rects, np.clip(f.answers * 0.4, 0, 1))
+    assert not np.array_equal(dp.refine(biased, 0.5), dp.refine(biased, 0.7))
 
 
 @pytest.mark.network
@@ -123,4 +163,4 @@ def test_tiny_model_end_to_end(tiny_qwen: str) -> None:  # noqa: F811
             ["--images", "1", "--size", "128", "--grid", "4", "--bits", "1", "--crop-side", "64", "--batch", "8"],
             model=model,
         )
-    assert report["configs"]["model"]["questions"] > 0 and report["ms_per_question"] > 0
+    assert report["configs"]["model [near]"]["questions"] > 0 and report["ms_per_question"] > 0
