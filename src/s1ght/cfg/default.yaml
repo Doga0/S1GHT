@@ -3,8 +3,8 @@
 
 # model (every mode except `models` and `version`)
 model: d1-3b            # catalog name, runtime URI (ollama://..., typesafe://...), HF repo or folder
-runtime: null           # for catalog names: native, ollama, ollaya, ...
-device: null            # native only: cuda, cuda:1, mps, cpu
+runtime: null           # for catalog names: ollama, ollaya, llama_server, vllm, ...
+device: null            # in-process runtimes only
 calibration: null       # calibration profile JSON from `s1ght calibrate`
 timeout: null           # server runtimes: seconds per request
 

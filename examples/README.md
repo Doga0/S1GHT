@@ -2,7 +2,7 @@
 
 | File | Shows | Needs |
 | --- | --- | --- |
-| [decide_image.py](decide_image.py) | one decision about one image: Noul, Choice, Score | a model (native or `--runtime ollama`) |
+| [decide_image.py](decide_image.py) | one decision about one image: Noul, Choice, Score | a model (Ollama by default) |
 | [decide_crops.py](decide_crops.py) | the same questions about several objects in one photo, one crop each, with questions from [inspection.yaml](inspection.yaml) | a model |
 | [predict_folder.py](predict_folder.py) | full-frame questions over a folder, video or camera; annotated frames saved | a model |
 | [track_video.py](track_video.py) | hybrid mode: YOLO tracks, per-track questions from [ask.yaml](ask.yaml), events | a model and `.[ultralytics]` |
@@ -14,8 +14,7 @@
 
 Every script takes `--model` and `--runtime`. The default model is `d1-omni-600m`:
 
-- **native** (default): `pip install "s1ght-visual-decisions[native]"`; downloads 2.4 GB once, runs on GPU or CPU.
-- **Ollama**: `ollama pull hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0` (0.8 GB), then add `--runtime ollama`. No torch needed.
+- **Ollama** (default): `ollama pull hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0` (0.8 GB).
 
 The same files work from the command line:
 

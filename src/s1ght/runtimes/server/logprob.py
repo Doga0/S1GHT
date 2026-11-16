@@ -2,8 +2,7 @@
 
 Each question is sent as one `POST /v1/chat/completions` with `max_tokens=1`, `logprobs` and
 `top_logprobs`, and the answer is read from the first token's top log-probabilities, with the
-same prompt, images and option-order debiasing as the native letter families
-(`s1ght.runtimes.letters`). Requests run concurrently.
+prompt, images and option-order debiasing from `s1ght.runtimes.letters`. Requests run concurrently.
 
     vllm serve Qwen/Qwen3-VL-4B-Instruct --max-model-len 8192
     model = S1GHT("vllm://localhost:8000/Qwen/Qwen3-VL-4B-Instruct")
@@ -46,7 +45,7 @@ class LogprobClient(RuntimeBase):
         api_key: Bearer token (`vllm serve --api-key`); defaults to `S1GHT_LOGPROB_API_KEY`.
         flip: Option-order debiasing: "auto", "always" or "never".
         margin: Gap in nat under which "auto" asks again in other option orders.
-        max_side: Longer image side in pixels (same default as the native families).
+        max_side: Longer image side in pixels (`letters.MAX_SIDE` by default).
         top_logprobs: Top tokens to request (vLLM allows 20 unless started with --max-logprobs).
         concurrency: Requests in flight.
         chat_template_kwargs: Sent with every request; `{"enable_thinking": False}` by default.
@@ -196,7 +195,7 @@ class LogprobClient(RuntimeBase):
 
 
 def _data_url(pil: Any) -> str:
-    """PNG data URL: lossless, so the server decodes exactly the pixels the native family sees."""
+    """PNG data URL: lossless, so the server decodes exactly the pixels S1GHT resized."""
     buf = io.BytesIO()
     pil.save(buf, "PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")

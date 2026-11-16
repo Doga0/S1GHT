@@ -20,7 +20,7 @@ S1GHT asks decision models typed questions about images and video: *is this pers
 Python 3.11 or newer.
 
 ```bash
-pip install "s1ght-visual-decisions[native]"          # in-process models (torch, transformers)
+pip install s1ght-visual-decisions
 ```
 
 On PyPI the package is `s1ght-visual-decisions`. In code it is still `import s1ght`, and on the command line `s1ght`.
@@ -30,13 +30,12 @@ From source, for the latest `main` or to develop:
 ```bash
 git clone https://github.com/Doga0/S1GHT.git
 cd S1GHT
-pip install -e ".[native]"
+pip install -e ".[dev]"
 ```
 
 | Extra | Adds | For |
 | --- | --- | --- |
 | *(none)* | numpy, pillow, opencv-headless, httpx, pyyaml, huggingface_hub | server runtimes (Ollama, Ollaya, vLLM, llama-server, TypeSafe), results, calibration |
-| `native` | torch, torchvision, transformers, accelerate | running models in-process on CUDA, MPS or CPU |
 | `ultralytics` | ultralytics, lap | `track()` with YOLO detectors (**AGPL-3.0**) |
 | `serve` | fastapi, uvicorn, python-multipart | `s1ght serve` |
 | `all` | all of the above | |
@@ -45,10 +44,16 @@ pip install -e ".[native]"
 
 ## Your first decision
 
+Run the model in Ollama and point S1GHT at it:
+
+```bash
+ollama pull hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0      # 0.8 GB
+```
+
 ```python
 from s1ght import S1GHT, Image, Noul, Choice
 
-model = S1GHT("d1-omni-600m")  # downloads 2.4 GB once; GPU if available, else CPU
+model = S1GHT("d1-omni-600m")  # its first runtime: Ollama at 127.0.0.1:11434
 
 r = model.decide(
     state={"photo": Image("bus.jpg")},
@@ -63,16 +68,6 @@ print(r.answers["scene"].probabilities)  # every option's probability
 ```
 
 `bus.jpg` ships with Ultralytics (`ultralytics/assets/bus.jpg`) or can be downloaded from `https://github.com/ultralytics/assets/releases/download/v0.0.0/bus.jpg`.
-
-**Without torch:** run the same model in Ollama and point S1GHT at it.
-
-```bash
-ollama pull hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0      # 0.8 GB
-```
-
-```python
-model = S1GHT("d1-omni-600m", runtime="ollama")
-```
 
 **From the command line:**
 
@@ -142,20 +137,18 @@ A model name picks the weights; a **runtime** picks what runs them.
 
 | Name | Weights | Runtimes | License |
 | --- | --- | --- | --- |
-| `d1-3b` | LiquidAI/d1-3B | native, ollaya, llama_cpp | LFM Open License 1.0 |
-| `d1-omni-600m` | LiquidAI/d1-omni-600M | native, ollama, llama_cpp | LFM Open License 1.0 |
-| `qwen3-vl-4b` | Qwen/Qwen3-VL-4B-Instruct | native, vllm, llama_server | Apache-2.0 |
+| `d1-3b` | LiquidAI/d1-3B | ollaya, llama_cpp | LFM Open License 1.0 |
+| `d1-omni-600m` | LiquidAI/d1-omni-600M | ollama, llama_cpp | LFM Open License 1.0 |
+| `qwen3-vl-4b` | Qwen/Qwen3-VL-4B-Instruct | vllm, llama_server | Apache-2.0 |
 
 The LFM Open License 1.0 does not cover commercial use by organizations with more than US$10M annual revenue. Every catalog entry is pinned to a Hugging Face commit.
 
 ```python
-S1GHT("d1-3b")  # native: CUDA (bf16/fp16), MPS or CPU (fp32)
-S1GHT("d1-3b", runtime="ollaya")  # Ollaya at 127.0.0.1:11435
+S1GHT("d1-3b")  # the first runtime: Ollaya at 127.0.0.1:11435
 S1GHT("ollama://hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0")  # any Ollama tag
 S1GHT("vllm://localhost:8000/Qwen/Qwen3-VL-4B-Instruct")  # vLLM
 S1GHT("llama-server://localhost:8080")  # llama.cpp server
 S1GHT("typesafe://jev-preview")  # TypeSafe hosted (TYPESAFE_API_KEY)
-S1GHT("org/any-vlm")  # any HF VLM, read through option letters (uncalibrated)
 ```
 
 `s1ght models` lists the catalog. See [docs/models.md](docs/models.md).
@@ -170,7 +163,7 @@ print(profile.report())  # ECE and Brier before -> after, per question type and 
 model = S1GHT("d1-omni-600m", calibration="hardhat-profile.json")
 ```
 
-On a hard-hat crop set, d1-omni-600M's ECE fell from 0.29–0.30 to 0.06–0.12 (Ollama and native). See [docs/calibration.md](docs/calibration.md).
+On a hard-hat crop set, d1-omni-600M's ECE fell from 0.29–0.30 to 0.06–0.12 (Ollama, and the in-process runtime of 0.1). See [docs/calibration.md](docs/calibration.md).
 
 ## Serve
 

@@ -1,7 +1,6 @@
 """One decision about one image, in the TypeSafe format.
 
-python examples/decide_image.py                                   # d1-omni-600m, native
-python examples/decide_image.py --runtime ollama                  # same model in Ollama
+python examples/decide_image.py                                   # d1-omni-600m in Ollama
 python examples/decide_image.py --model qwen3-vl-4b --image my.jpg
 """
 
@@ -17,7 +16,9 @@ BUS = "https://github.com/ultralytics/assets/releases/download/v0.0.0/bus.jpg"
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", default="d1-omni-600m")
-ap.add_argument("--runtime", default=None, help="native, ollama, ollaya, vllm, ... (default: the catalog's first)")
+ap.add_argument(
+    "--runtime", default=None, help="ollama, ollaya, vllm, llama_server, ... (default: the catalog's first)"
+)
 ap.add_argument("--image", default=None, help="an image file (default: Ultralytics' bus.jpg)")
 args = ap.parse_args()
 

@@ -1,4 +1,4 @@
-"""Decision runtimes: native (in-process) and server (HTTP) back ends behind one `Runtime` protocol."""
+"""Decision runtimes: server (HTTP) and in-process back ends behind one `Runtime` protocol."""
 
 from __future__ import annotations
 
@@ -33,8 +33,4 @@ def load_runtime(spec: str | RuntimeSpec, *, runtime: str | None = None, **kwarg
         if spec.base_url is not None:
             kwargs.setdefault("base_url", spec.base_url)
         return LogprobClient(spec.model, server=spec.runtime, **kwargs)
-    if spec.runtime == "native":
-        from s1ght.runtimes.native.engine import NativeRuntime
-
-        return NativeRuntime(spec, **kwargs)
     raise NotImplementedError(f"the {spec.runtime!r} runtime is not implemented yet (a later step)")

@@ -27,9 +27,9 @@ Exit codes: `0` success, `1` runtime error (missing file, unreachable server, ..
 
 | Key | Default | |
 | --- | --- | --- |
-| `model` | `d1-3b` | catalog name, runtime URI, HF repo id or local folder |
-| `runtime` | | for catalog names: `native`, `ollama`, `ollaya`, `vllm`, `llama_server` |
-| `device` | | native only: `cuda`, `cuda:1`, `mps`, `cpu` |
+| `model` | `d1-3b` | catalog name or runtime URI |
+| `runtime` | | for catalog names: `ollama`, `ollaya`, `vllm`, `llama_server` |
+| `device` | | in-process runtimes only |
 | `calibration` | | profile JSON from `calibrate` |
 | `timeout` | | server runtimes: seconds per request |
 

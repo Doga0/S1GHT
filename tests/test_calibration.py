@@ -168,7 +168,7 @@ def test_calibrate_needs_raw_scores() -> None:
 
 
 def test_profile_roundtrip_and_fallback(tmp_path: Path) -> None:
-    p = CalibrationProfile("m", "native", "hf://a/b@c", {"noul/crop": 2.0, "noul/full_frame": 0.5, "choice/crop": 1.5})
+    p = CalibrationProfile("m", "ollama", "hf://a/b@c", {"noul/crop": 2.0, "noul/full_frame": 0.5, "choice/crop": 1.5})
     loaded = CalibrationProfile.load(p.save(tmp_path / "p.json"))
     assert loaded.temperatures == p.temperatures and loaded.model == "m"
     assert loaded.temperature(NOUL, "crop") == 2.0

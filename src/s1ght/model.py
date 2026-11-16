@@ -1,6 +1,6 @@
 """`S1GHT`: the user-facing model, Ultralytics-style.
 
-model = S1GHT("d1-3b")                         # native runtime, GPU if available else CPU
+model = S1GHT("d1-3b")                         # the catalog entry's default runtime
 model = S1GHT("ollama://clef-flash")           # any catalog name or runtime URI
 r = model.decide(state={"photo": Image("bus.jpg")},
                  questions={"has_people": Noul("Are people visible in `photo`?")})
@@ -22,7 +22,7 @@ from typing import Any, Self
 from s1ght.detectors.base import Detector, Frame
 from s1ght.engine.calibration import CalibratedRuntime, CalibrationProfile, calibrate, load_examples
 from s1ght.engine.crops import fit_to_limits
-from s1ght.hub import RuntimeSpec, resolve
+from s1ght.hub import LOCAL_RUNTIMES, RuntimeSpec, resolve
 from s1ght.io.sources import SourceFrame, is_live, load_source
 from s1ght.results import Boxes, Results
 from s1ght.runtimes import load_runtime
@@ -37,12 +37,12 @@ class S1GHT:
 
     Args:
         model: Catalog name ("d1-3b"), runtime URI ("ollama://clef-flash", "typesafe://jev-preview",
-            "hf://org/repo@rev"), HF repo id, local directory, or a ready `Runtime` object.
-        runtime: For catalog names, which runtime to use ("native", "ollaya", ...).
-        device: Native runtime only: "cuda", "cuda:1", "mps" or "cpu".
+            "llama-server://localhost:8080"), or a ready `Runtime` object.
+        runtime: For catalog names, which runtime to use ("ollaya", "llama_server", ...).
+        device: In-process runtimes only (`hub.LOCAL_RUNTIMES`): where the model runs.
         calibration: A calibration profile (path or `CalibrationProfile`) from `calibrate()`; applies
             to any runtime with raw scores. Without one, answers are the runtime's uncalibrated readout.
-        **kwargs: Passed to the runtime (e.g. `dtype` for native, `base_url`/`api_key` for servers).
+        **kwargs: Passed to the runtime (e.g. `base_url`/`api_key`/`timeout` for servers).
     """
 
     def __init__(
@@ -63,10 +63,12 @@ class S1GHT:
             base: Runtime = model
         else:
             self.spec = resolve(model, runtime)
-            if self.spec.runtime == "native":
-                kwargs.update(device=device)
-            elif device is not None:
-                raise ValueError(f"device= applies to the native runtime, not {self.spec.runtime!r}")
+            if device is not None:
+                if self.spec.runtime not in LOCAL_RUNTIMES:
+                    raise ValueError(
+                        f"device= applies to in-process runtimes {LOCAL_RUNTIMES}, not {self.spec.runtime!r}"
+                    )
+                kwargs["device"] = device
             base = load_runtime(self.spec, **kwargs)
         self.base_runtime: Runtime = base
         self.runtime: Runtime = base

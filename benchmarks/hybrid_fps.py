@@ -72,7 +72,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("source")
     ap.add_argument("--model", default="d1-omni-600m", help="catalog name, URI, or fake-slow")
-    ap.add_argument("--runtime", default=None, help="catalog runtime, e.g. ollama or native")
+    ap.add_argument("--runtime", default=None, help="catalog runtime, e.g. ollama or llama_server")
     ap.add_argument("--detector", default="yolo11n.pt")
     ap.add_argument("--budget", type=float, default=2.0)
     ap.add_argument("--timeout", type=float, default=300.0, help="server runtimes: seconds per request")
