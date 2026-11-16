@@ -2,7 +2,7 @@
 
 ```
 source ──► "where" layer ──► scheduler ──► decision runtime ──► fusion ──► Results
-           detector (hybrid)              native | server
+           detector (hybrid)              server | in-process
            localizer (standalone, P2)        │
                                        calibration profile
 ```
@@ -17,8 +17,7 @@ The two modes differ only in the "where" layer. Questions, runtimes, calibration
 | `s1ght/schema/` | `Noul`, `Choice`, `Score`, `Box`; `Image`; requests and answers with their TypeSafe and Ollama wire forms |
 | `s1ght/hub.py`, `registry.yaml` | names and URIs → `RuntimeSpec`; the catalog; downloads |
 | `s1ght/runtimes/base.py` | the `Runtime` protocol, `Capabilities`, `RawScores`, logits → answers |
-| `s1ght/runtimes/native/` | `NativeRuntime` and model families (`lfm2_vl`, `d1_omni`, `qwen_vl`, `semif_generic`) |
-| `s1ght/runtimes/letters.py` | the option-letter prompt and readout shared by letter families and logprob servers |
+| `s1ght/runtimes/letters.py` | the option-letter prompt and readout for chat VLMs, shared by every runtime that reads letters |
 | `s1ght/runtimes/server/` | `/v1/systemone` client (TypeSafe, Ollama, Ollaya) and logprob client (vLLM, llama-server) |
 | `s1ght/engine/` | crops, scheduler, fusion, calibration |
 | `s1ght/detectors/` | the `Detector` protocol and the Ultralytics adapter |
@@ -26,7 +25,7 @@ The two modes differ only in the "where" layer. Questions, runtimes, calibration
 | `s1ght/results.py` | `Results`, `Boxes`, `Event` |
 | `s1ght/cli.py`, `s1ght/server.py` | the `s1ght` command and `s1ght serve` |
 
-Dependency rules keep `import s1ght` light: `schema`, `engine` and `runtimes/base` never import torch, httpx or Ultralytics; native code imports torch lazily; the server client imports httpx but not torch. CI checks that `import s1ght` works without torch.
+Dependency rules keep `import s1ght` light: `schema`, `engine` and `runtimes/base` never import httpx or Ultralytics; the server clients import httpx, and in-process runtimes import their engine lazily. CI checks that `import s1ght` works without torch.
 
 ## Everything but the forward pass is S1GHT's
 
@@ -57,22 +56,6 @@ class MyRuntime(RuntimeBase):
 
 `Capabilities` declares what a runtime supports (`images`, `box`, `batch`, `prefix_cache`, `attention`, `hidden_states`, `raw_scores`, `max_options`, `image_px`). Features check them at setup time and fail with `CapabilityError` instead of degrading silently.
 
-## Writing a native family
-
-A family adapter loads one model family and answers a batch of requests given as `(state, wire questions, PIL images)` with images replaced by `[image N]` labels:
-
-```python
-class MyFamily:
-    name = "my_family"
-    caps = Capabilities(images=True, batch=True, raw_scores=True)  # optional; the native default otherwise
-
-    def load(self, path: str, device: str, dtype: str) -> None: ...
-    def run(self, items) -> list[tuple[dict[str, dict], int]]: ...  # per item: ({qid: wire answer}, tokens read)
-    def close(self) -> None: ...
-```
-
-Register it in `s1ght/runtimes/native/families/__init__.py` and in `FAMILIES` in `hub.py`, and give catalog entries `family: my_family`. Chat VLMs usually need no new family: subclass `SemifGenericFamily` and set `template_kwargs`, as `QwenVlFamily` does.
-
 ## Writing a detector
 
 `track(detector=...)` takes any object with `stream(source, **kwargs)` that yields `s1ght.detectors.base.Frame` (image, `xyxy`, `conf`, `cls`, `ids`, `names`, time `t`, `index`, `path`).
@@ -84,14 +67,14 @@ my-model:
   source: hf://org/repo@<40-char commit>
   family: qwen_vl
   runtimes:
-    native: {dtype: {cuda: bf16, t4: fp16, cpu: fp32}}
     vllm: {model: org/repo}
+    llama_server: {model: repo}
   calibration: null
   license: apache-2.0
 ```
 
-Pin a full commit hash: it fixes the weights and any remote code, and calibration profiles refuse rolling names.
+`family` says how the model is prompted and read: `lfm2_vl` and `d1_omni` use the model's own decision engine, `qwen_vl` and `semif_generic` use option letters. Pin a full commit hash: it fixes the weights, and calibration profiles refuse rolling names.
 
 ## Tests
 
-`pytest` runs the offline suite (no GPU, network or model downloads; `tests/conftest.py` has a deterministic `FakeRuntime`). Tests marked `gpu`, `network` or `slow` are opt-in: `pytest -m network`, and so on. `benchmarks/native_gpu.ipynb` runs the GPU checks on Colab or Kaggle.
+`pytest` runs the offline suite (no GPU, network or model downloads; `tests/conftest.py` has a deterministic `FakeRuntime`). Tests marked `gpu`, `network` or `slow` are opt-in: `pytest -m network`, and so on.

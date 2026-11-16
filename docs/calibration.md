@@ -45,7 +45,7 @@ JSON Lines, one labeled question per line; image paths are relative to the file.
 
 ## Where profiles apply
 
-`calibration=` works with every runtime that exposes raw scores: native, Ollama, Ollaya, TypeSafe, vLLM, llama-server. Profiles record the model, the runtime and its exact source (an HF commit or a server tag), and refuse rolling aliases such as `jev-latest` or `clef:latest`, whose weights can change under the profile. A profile fitted for one model is refused by another.
+`calibration=` works with every runtime that exposes raw scores: Ollama, Ollaya, TypeSafe, vLLM, llama-server. Profiles record the model, the runtime and its exact source (an HF commit or a server tag), and refuse rolling aliases such as `jev-latest` or `clef:latest`, whose weights can change under the profile. A profile fitted for one model is refused by another.
 
 `track()` uses the `crop` temperatures, `decide()` and `predict()` the `full_frame` ones, and requests without images the `text` ones.
 
@@ -63,7 +63,7 @@ python benchmarks/state_pairs.py calibrate out/hardhat/manifest.jsonl --model d1
 | Runtime | T | ECE before → after | Brier before → after | Accuracy |
 | --- | ---: | ---: | ---: | ---: |
 | d1-omni-600M, Ollama GGUF Q8_0 | 5.07 | 0.291 → 0.117 | 0.652 → 0.489 | 0.62 |
-| d1-omni-600M, native fp32 | 5.15 | 0.300 → 0.056 | 0.679 → 0.489 | 0.56 |
+| d1-omni-600M, in-process fp32 (0.1, removed) | 5.15 | 0.300 → 0.056 | 0.679 → 0.489 | 0.56 |
 
 Calibration does not change which answer wins (accuracy stays); it makes the probabilities honest about how often that answer is right.
 

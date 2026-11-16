@@ -325,7 +325,7 @@ def calibrate(
     """Fit one temperature per question type and input kind, and measure ECE/Brier before and after.
 
     Args:
-        runtime: A runtime with raw scores (native or server).
+        runtime: A runtime with raw scores.
         examples: Labeled examples (`load_examples`); Box questions are skipped.
         model, runtime_name, source: What the profile is bound to (`source` should pin the version).
         folds: k for out-of-fold evaluation when there is no "test" split.

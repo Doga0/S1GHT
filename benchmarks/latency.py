@@ -1,7 +1,7 @@
 """Latency table for several models and runtimes, as Markdown (for docs/models.md and the design doc).
 
-    python benchmarks/latency.py d1-omni-600m:native d1-omni-600m:ollama --sizes 128 256 384 640 --batches 1 4 16
-    python benchmarks/latency.py qwen3-vl-4b:native --device cuda --out results/t4.json
+    python benchmarks/latency.py d1-omni-600m:ollama --sizes 128 256 384 640 --batches 1 4 16
+    python benchmarks/latency.py qwen3-vl-4b:vllm --out results/t4.json
 
 Each target is `model[:runtime]`. One model is loaded at a time and closed before the next, so
 memory numbers are per model. See `s1ght.bench` for what is measured.
@@ -17,6 +17,7 @@ from pathlib import Path
 
 from s1ght import S1GHT
 from s1ght.bench import BenchRow, bench
+from s1ght.hub import LOCAL_RUNTIMES
 
 
 def hardware(device: str | None) -> str:
@@ -65,14 +66,14 @@ def main() -> None:
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--max-time", type=float, default=60.0)
-    ap.add_argument("--device", default=None, help="native runtimes: cuda, cpu, ...")
+    ap.add_argument("--device", default=None, help="in-process runtimes: where the model runs")
     ap.add_argument("--out", type=Path, default=None, help="also write the rows as JSON")
     args = ap.parse_args()
 
     rows: list[BenchRow] = []
     for target in args.targets:
         name, _, runtime = target.partition(":")
-        kwargs = {"device": args.device} if args.device and runtime in ("", "native") else {}
+        kwargs = {"device": args.device} if args.device and runtime in LOCAL_RUNTIMES else {}
         with S1GHT(name, runtime=runtime or None, **kwargs) as model:
             print(f"{target}: {model.runtime!r}", file=sys.stderr, flush=True)
             rows += bench(

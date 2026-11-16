@@ -4,6 +4,10 @@ All notable changes to S1GHT. Versions follow [semantic versioning](https://semv
 
 ## [Unreleased]
 
+### Removed
+
+- **The native runtime** (in-process transformers: `runtime="native"`, the `native` extra, `hf://` URIs, Hugging Face repo ids and local model folders as model names). Models run through llama.cpp, Ollama, Ollaya, vLLM and TypeSafe; ONNX Runtime and OpenVINO follow. Catalog entries now default to their first remaining runtime (`d1-3b`: Ollaya, `d1-omni-600m`: Ollama, `qwen3-vl-4b`: vLLM).
+
 ## [0.1.0] - 2026-10-26
 
 The first release: the shared core and hybrid mode (P1).

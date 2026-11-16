@@ -1,26 +1,19 @@
-"""Option-letter readout: prompts, debiasing, the native letter family and the logprob server client.
-
-The native family is tested with its forward pass replaced, so no torch model is loaded; a
-`slow` test compares real Qwen3-VL-4B weights against a running vLLM/llama-server when
-`S1GHT_LOGPROB_URL` is set.
-"""
+"""Option-letter readout: prompts, debiasing and the logprob server client (against a fake server)."""
 
 from __future__ import annotations
 
 import base64
 import io
 import json
-import os
 
 import httpx
 import numpy as np
 import pytest
 from PIL import Image as PILImage
 
-from s1ght import S1GHT, Box, Choice, Image, Noul, Score
+from s1ght import Box, Choice, Image, Noul, Score
 from s1ght.runtimes import letters
 from s1ght.runtimes.base import CapabilityError, Runtime
-from s1ght.runtimes.native.families.semif_generic import SemifGenericFamily
 from s1ght.runtimes.server.logprob import LogprobClient
 from s1ght.runtimes.server.systemone import SystemOneError
 from s1ght.schema.systemone import ChoiceAnswer, NoulAnswer, ScoreAnswer, SystemOneRequest
@@ -118,85 +111,6 @@ def test_fit_image() -> None:
     assert letters.fit_image(same) is same
 
 
-# --- native letter family (forward pass replaced) --------------------------------------------
-
-
-class FakeLetterFamily(SemifGenericFamily):
-    """`forward` returns logits for a 26-letter vocabulary from `biased_letters`."""
-
-    def __init__(self, **kw) -> None:
-        super().__init__(**kw)
-        self.model = object()
-        self.letter_ids = {c: [i] for i, c in enumerate(letters.LETTERS)}
-        self.seen: list[tuple[letters.Prompt, list]] = []
-
-    def load(self, path, device, dtype) -> None:
-        pass
-
-    def forward(self, prompts, images):
-        rows = np.full((len(prompts), 26), -30.0)
-        for row, p in zip(rows, prompts, strict=True):
-            for c, v in biased_letters(p).items():
-                row[letters.LETTERS.index(c)] = v
-            self.seen.append((p, [images[p.item][i] for i in range(len(images[p.item]))]))
-        return rows, [100] * len(prompts)
-
-
-def native(family: SemifGenericFamily) -> S1GHT:
-    from s1ght.hub import RuntimeSpec
-    from s1ght.runtimes.native.engine import NativeRuntime
-
-    spec = RuntimeSpec("native", "Qwen/Qwen3-VL-4B-Instruct", family="qwen_vl")
-    return S1GHT(NativeRuntime(spec, family=family, path=".", device="cpu", dtype="fp32"))
-
-
-def test_native_letter_family_answers() -> None:
-    family = FakeLetterFamily(batch=4)
-    model = native(family)
-    assert model.runtime.caps.max_options == 26 and not model.runtime.caps.box
-    photo = Image(png((2000, 1000)))
-    r = model.decide({"photo": photo}, QUESTIONS)
-    assert isinstance(r.answers["bus"], NoulAnswer)
-    assert r.answers["bus"].noul == pytest.approx(1 / (1 + np.exp(-2.0)))
-    assert isinstance(r.answers["color"], ChoiceAnswer) and r.answers["color"].choice == "blue"
-    assert isinstance(r.answers["busy"], ScoreAnswer)
-    assert r.usage["input_tokens"] == 800  # 2 + 3 + 3 prompts x 100 tokens
-    assert family.seen[0][1][0].size == (1024, 512)  # S1GHT's resize, before the processor
-    with pytest.raises(CapabilityError):
-        model.decide("x", {"where": Box("the bus")})
-    with pytest.raises(ValueError, match="26"):
-        model.decide("x", {"c": Choice("?", [f"o{i}" for i in range(27)])})
-
-
-def test_family_options() -> None:
-    from s1ght.runtimes.native.families import get_family
-
-    fam = get_family("qwen_vl", flip="never", batch=2)
-    assert fam.name == "qwen_vl" and fam.flip == "never" and fam.template_kwargs == {"enable_thinking": False}
-    with pytest.raises(ValueError, match="no options"):
-        get_family("d1_omni", flip="never")
-    with pytest.raises(ValueError, match="flip"):
-        get_family("semif_generic", flip="sometimes")
-
-
-def test_letter_token_ids() -> None:
-    from s1ght.runtimes.native.families.semif_generic import letter_token_ids
-
-    class Tok:
-        def encode(self, text, add_special_tokens=False):
-            return [ord(text.strip()) + (1000 if text.startswith(" ") else 0)]
-
-    ids = letter_token_ids(Tok())
-    assert ids["A"] == [65, 1065]
-
-    class Split:
-        def encode(self, text, add_special_tokens=False):
-            return [1, 2]
-
-    with pytest.raises(ValueError, match="single token"):
-        letter_token_ids(Split())
-
-
 # --- logprob server client -------------------------------------------------------------------
 
 
@@ -227,18 +141,20 @@ class FakeServer:
         )
 
 
-def test_logprob_client_matches_native_family() -> None:
+def test_logprob_client_answers() -> None:
     server = FakeServer()
     client = LogprobClient("Qwen/Qwen3-VL-4B-Instruct", base_url="http://vllm", transport=httpx.MockTransport(server))
     assert isinstance(client, Runtime)
+    assert client.caps.max_options == 26 and not client.caps.box
     photo = Image(png((2000, 1000)))
-    req = SystemOneRequest("m", {"photo": photo}, QUESTIONS)
-    remote = client.decide(req)
-    local = native(FakeLetterFamily()).runtime.decide(req)
-    assert remote.answers["bus"].noul == pytest.approx(local.answers["bus"].noul)  # type: ignore[union-attr]
-    assert remote.answers["color"].probabilities == pytest.approx(local.answers["color"].probabilities)  # type: ignore[union-attr]
-    assert remote.answers["busy"].score == pytest.approx(local.answers["busy"].score)  # type: ignore[union-attr]
+    remote = client.decide(SystemOneRequest("m", {"photo": photo}, QUESTIONS))
+    assert isinstance(remote.answers["bus"], NoulAnswer)
+    assert remote.answers["bus"].noul == pytest.approx(1 / (1 + np.exp(-2.0)))
+    assert isinstance(remote.answers["color"], ChoiceAnswer) and remote.answers["color"].choice == "blue"
+    assert isinstance(remote.answers["busy"], ScoreAnswer)
     assert remote.usage["input_tokens"] == 400
+    with pytest.raises(ValueError, match="26"):
+        client.decide(SystemOneRequest("m", "x", {"c": Choice("?", [f"o{i}" for i in range(27)])}))
 
     body = server.bodies[0]
     assert body["max_tokens"] == 1 and body["logprobs"] is True and body["top_logprobs"] == 20
@@ -246,7 +162,7 @@ def test_logprob_client_matches_native_family() -> None:
     url = body["messages"][1]["content"][1]["image_url"]["url"]
     sent = PILImage.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
     assert url.startswith("data:image/png;base64,") and sent.size == (1024, 512)
-    # the same prompt text the native family renders
+    # the prompt `letters.build` renders
     p = letters.build(0, "bus", {"photo": "[image 1]"}, QUESTIONS["bus"].to_wire(), 1, [0, 1])
     assert body["messages"][1]["content"][-1] == p.messages[1]["content"][-1]
     assert body["messages"][0] == p.messages[0]
@@ -280,27 +196,3 @@ def test_logprob_client_errors() -> None:
         client.decide(SystemOneRequest("m", "x", {"bus": QUESTIONS["bus"]}))
     with pytest.raises(ValueError, match="server"):
         LogprobClient("m", server="tgi")
-
-
-# --- live: Qwen3-VL-4B native vs a logprob server --------------------------------------------
-
-
-@pytest.mark.slow
-@pytest.mark.network
-def test_qwen3_vl_native_matches_server() -> None:
-    """Needs the native extra, ~9 GB of weights and a vLLM or llama-server at S1GHT_LOGPROB_URL."""
-    url = os.environ.get("S1GHT_LOGPROB_URL")
-    if not url:
-        pytest.skip("set S1GHT_LOGPROB_URL to a server running Qwen3-VL-4B-Instruct")
-    pytest.importorskip("torch")
-    import ultralytics
-
-    bus = Image(os.path.join(os.path.dirname(ultralytics.__file__), "assets", "bus.jpg"))
-    qs = {"bus": Noul("Is there a bus in `photo`?"), "where": Choice("Where is this?", ["street", "beach", "kitchen"])}
-    server = S1GHT(
-        f"vllm://{url.split('://')[-1]}/{os.environ.get('S1GHT_LOGPROB_MODEL', 'Qwen/Qwen3-VL-4B-Instruct')}"
-    )
-    with S1GHT("qwen3-vl-4b") as local:
-        a, b = local.decide({"photo": bus}, qs), server.decide({"photo": bus}, qs)
-    assert a.answers["where"].choice == b.answers["where"].choice  # type: ignore[union-attr]
-    assert a.answers["bus"].noul == pytest.approx(b.answers["bus"].noul, abs=0.05)  # type: ignore[union-attr]

@@ -3,20 +3,17 @@
 `resolve(name)` turns what the user passed to `S1GHT(...)` into a `RuntimeSpec`, in this order:
 
 1. A short name from the packaged catalog (`registry.yaml`), e.g. "d1-3b".
-2. A URI: `hf://org/repo[@rev][/file]`, `ollama://<tag>`, `ollaya://<tag>`, `typesafe://<model>`,
+2. A runtime URI: `ollama://<tag>`, `ollaya://<tag>`, `typesafe://<model>`,
    `vllm://host:port/<model>`, `llama-server://host:port[/<model>]`.
-3. A Hugging Face repo id not in the catalog ("org/repo") or a local model directory: the
-   family is guessed from `config.json`; unknown architectures fall back to `semif_generic`
-   (generic option-letter readout) with an "uncalibrated" warning.
 
-Native weights are downloaded with `huggingface_hub` into `$S1GHT_CACHE` (default
-`~/.cache/s1ght`). Server runtimes download their own models (`ollama pull`, ...).
+Weights that S1GHT runs itself (in-process runtimes) are downloaded with `huggingface_hub`
+into `$S1GHT_CACHE` (default `~/.cache/s1ght`). Server runtimes download their own models
+(`ollama pull`, ...).
 """
 
 from __future__ import annotations
 
 import difflib
-import json
 import os
 import re
 import warnings
@@ -28,22 +25,12 @@ from typing import Any
 import yaml
 
 SERVER_RUNTIMES = ("ollama", "ollaya", "typesafe", "vllm", "llama_server")
-RUNTIMES = ("native", "llama_cpp", *SERVER_RUNTIMES)
+LOCAL_RUNTIMES = ("llama_cpp",)
+"""Runtimes that run the model in this process; they take `device=`."""
+RUNTIMES = (*LOCAL_RUNTIMES, *SERVER_RUNTIMES)
 FAMILIES = ("lfm2_vl", "d1_omni", "qwen_vl", "semif_generic")
-
-# config.json `model_type` → family adapter
-_MODEL_TYPE_FAMILY = {
-    "lfm2_vl": "lfm2_vl",
-    "d1_omni": "d1_omni",
-    "qwen2_vl": "qwen_vl",
-    "qwen2_5_vl": "qwen_vl",
-    "qwen3_vl": "qwen_vl",
-}
+"""How a model is prompted and read: its own decision engine (d1) or option letters (chat VLMs)."""
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
-
-
-class UncalibratedWarning(UserWarning):
-    """A model is used without a calibration profile; its probabilities are the raw readout."""
 
 
 def cache_dir() -> Path:
@@ -103,12 +90,12 @@ class RuntimeSpec:
     """Everything needed to build a runtime for one model.
 
     Attributes:
-        runtime: "native", "llama_cpp", "ollama", "ollaya", "typesafe", "vllm" or "llama_server".
-        model: Model name for that runtime: HF repo id (native), server tag or served model id.
-        source: Weights to download for native/llama_cpp; None for server runtimes.
-        family: Native adapter family, or None when the runtime reads answers itself.
+        runtime: "llama_cpp", "ollama", "ollaya", "typesafe", "vllm" or "llama_server".
+        model: Model name for that runtime: HF repo id (in-process), server tag or served model id.
+        source: Weights to download for in-process runtimes; None for server runtimes.
+        family: Prompt and readout family, or None when the runtime reads answers itself.
         base_url: Server URL from the URI (vllm), else None (client defaults / env vars apply).
-        options: Runtime options from the catalog (e.g. native dtypes, llama_cpp files).
+        options: Runtime options from the catalog (e.g. llama_cpp files).
         entry: Catalog entry when the name came from the catalog.
         calibrated: Whether a calibration profile exists for this model.
     """
@@ -155,8 +142,7 @@ def parse_uri(uri: str) -> RuntimeSpec:
     if not sep or not rest:
         raise ValueError(f"not a model URI: {uri!r}")
     if scheme == "hf":
-        ref = HFRef.parse(uri)
-        return RuntimeSpec(runtime="native", model=ref.repo, source=ref)
+        raise ValueError(f"{uri!r}: the in-process transformers runtime was removed; {_HOW}")
     if scheme in ("ollama", "ollaya", "typesafe"):
         return RuntimeSpec(runtime=scheme, model=rest)
     if scheme == "vllm":
@@ -169,53 +155,17 @@ def parse_uri(uri: str) -> RuntimeSpec:
         if not host:
             raise ValueError(f"expected llama-server://host:port[/model], got {uri!r}")
         return RuntimeSpec(runtime="llama_server", model=model or "default", base_url=f"http://{host}")
-    raise ValueError(
-        f"unknown scheme {scheme!r} in {uri!r}; expected hf, ollama, ollaya, typesafe, vllm or llama-server"
-    )
+    raise ValueError(f"unknown scheme {scheme!r} in {uri!r}; expected ollama, ollaya, typesafe, vllm or llama-server")
 
 
-def family_from_config(config: dict[str, Any]) -> str | None:
-    """Family adapter for a transformers `config.json`, or None if the architecture is unknown."""
-    family = _MODEL_TYPE_FAMILY.get(str(config.get("model_type", "")))
-    if family is None:
-        for arch in config.get("architectures") or []:
-            if arch.startswith(("Qwen2VL", "Qwen2_5_VL", "Qwen3VL")):
-                return "qwen_vl"
-            if arch.startswith("Lfm2Vl"):
-                return "lfm2_vl"
-    return family
-
-
-def _fetch_config(ref: HFRef) -> dict[str, Any]:
-    from huggingface_hub import hf_hub_download
-
-    path = hf_hub_download(ref.repo, "config.json", revision=ref.revision, cache_dir=cache_dir() / "hub")
-    return json.loads(Path(path).read_text(encoding="utf-8"))
-
-
-def _guessed(spec: RuntimeSpec, config: dict[str, Any]) -> RuntimeSpec:
-    family = family_from_config(config)
-    if family is None:
-        family = "semif_generic"
-        warnings.warn(
-            f"{spec.model}: architecture {config.get('model_type') or config.get('architectures')} is not in the "
-            "catalog; using the generic option-letter readout. Answers are uncalibrated.",
-            UncalibratedWarning,
-            stacklevel=3,
-        )
-    else:
-        warnings.warn(
-            f"{spec.model} is not in the catalog; answers are uncalibrated.", UncalibratedWarning, stacklevel=3
-        )
-    return RuntimeSpec(runtime=spec.runtime, model=spec.model, source=spec.source, family=family)
+_HOW = "use a catalog name (`s1ght models`) or a runtime URI such as ollama://<tag> or llama-server://host:port"
 
 
 def resolve(name: str, runtime: str | None = None, *, registry: dict[str, ModelEntry] | None = None) -> RuntimeSpec:
     """Resolve a catalog name, URI, HF repo id or local directory into a `RuntimeSpec`.
 
     Args:
-        name: E.g. "d1-3b", "ollama://clef-flash", "vllm://localhost:8000/Qwen/Qwen3-VL-4B-Instruct",
-            "org/repo" or a local path.
+        name: E.g. "d1-3b", "ollama://clef-flash" or "vllm://localhost:8000/Qwen/Qwen3-VL-4B-Instruct".
         runtime: For catalog names, which of the entry's runtimes to use (default: its first one).
         registry: Catalog to use; the packaged one by default.
     """
@@ -227,22 +177,9 @@ def resolve(name: str, runtime: str | None = None, *, registry: dict[str, ModelE
         raise ValueError(f"runtime= only applies to catalog names; put the runtime in the URI instead of {name!r}")
 
     if "://" in name:
-        spec = parse_uri(name)
-        if spec.runtime == "native":
-            return _guessed(spec, _fetch_config(spec.source))  # type: ignore[arg-type]
-        return spec
-
-    local = Path(name)
-    if local.is_dir():
-        config = local / "config.json"
-        if not config.is_file():
-            raise FileNotFoundError(f"{local} has no config.json")
-        spec = RuntimeSpec(runtime="native", model=str(local.resolve()))
-        return _guessed(spec, json.loads(config.read_text(encoding="utf-8")))
-
-    if re.fullmatch(r"[\w.-]+/[\w.-]+(@[\w.-]+)?", name):
-        ref = HFRef.parse(name)
-        return _guessed(RuntimeSpec(runtime="native", model=ref.repo, source=ref), _fetch_config(ref))
+        return parse_uri(name)
+    if Path(name).is_dir() or re.fullmatch(r"[\w.-]+/[\w.-]+(@[\w.-]+)?", name):
+        raise ValueError(f"{name!r}: the in-process transformers runtime was removed; {_HOW}")
 
     close = difflib.get_close_matches(name.lower(), list(catalog), n=3)
     hint = f" Did you mean {', '.join(close)}?" if close else f" Catalog: {', '.join(sorted(catalog))}."
@@ -255,10 +192,10 @@ def _from_entry(entry: ModelEntry, runtime: str | None) -> RuntimeSpec:
         raise ValueError(f"{entry.name} has no {runtime!r} runtime; available: {list(entry.runtimes)}")
     opts = entry.runtimes[runtime]
     spec = RuntimeSpec(runtime, str(opts), entry=entry, calibrated=entry.calibration is not None)
-    if runtime == "native":
-        return replace(spec, model=entry.source.repo, source=entry.source, family=entry.family, options=opts or {})
     if runtime == "llama_cpp":
-        return replace(spec, model=entry.source.repo, source=HFRef.parse(opts["gguf"]), options=opts)
+        return replace(
+            spec, model=entry.source.repo, source=HFRef.parse(opts["gguf"]), family=entry.family, options=opts
+        )
     if runtime in ("vllm", "llama_server"):
         return replace(spec, model=opts["model"], family=entry.family, base_url=opts.get("base_url"))
     return spec

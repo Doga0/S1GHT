@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from s1ght import hub
-from s1ght.hub import HFRef, RuntimeSpec, UncalibratedWarning, download, load_registry, parse_uri, resolve
+from s1ght.hub import HFRef, RuntimeSpec, download, load_registry, parse_uri, resolve
 from s1ght.runtimes import load_runtime
 from s1ght.runtimes.server.systemone import SystemOneClient
 
@@ -15,10 +15,13 @@ D1 = "LiquidAI/d1-3B"
 def no_network(monkeypatch):
     """Fail loudly if a test tries to reach Hugging Face."""
 
+    import huggingface_hub
+
     def boom(*a, **k):
         raise AssertionError("network access in an offline test")
 
-    monkeypatch.setattr(hub, "_fetch_config", boom)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", boom)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", boom)
 
 
 # --- catalog ---------------------------------------------------------------------------------
@@ -37,21 +40,18 @@ def test_registry_entries_are_pinned_and_known() -> None:
                         assert HFRef.parse(v).pinned, (e.name, v)
 
 
-def test_resolve_d1_3b_defaults_to_native(no_network) -> None:
+def test_resolve_d1_3b_defaults_to_first_runtime(no_network) -> None:
     spec = resolve("d1-3b")
-    assert spec.runtime == "native" and spec.model == D1
-    assert spec.source == HFRef(D1, "051bcc464b01b9f92942b364d9586b0ef5912432")
-    assert spec.family == "lfm2_vl"
-    assert spec.options["dtype"] == {"cuda": "bf16", "t4": "fp16", "cpu": "fp32"}
-    assert spec.calibrated is False
-    assert resolve("D1-3B").model == D1
+    assert (spec.runtime, spec.model, spec.calibrated) == ("ollaya", "d1:3b-vision", False)
+    assert resolve("D1-3B") == spec
+    assert load_registry()["d1-3b"].source == HFRef(D1, "051bcc464b01b9f92942b364d9586b0ef5912432")
 
 
 def test_resolve_qwen3_vl_4b(no_network) -> None:
     spec = resolve("qwen3-vl-4b")
-    assert (spec.runtime, spec.model, spec.family) == ("native", "Qwen/Qwen3-VL-4B-Instruct", "qwen_vl")
-    vllm = resolve("qwen3-vl-4b", runtime="vllm")
-    assert (vllm.runtime, vllm.model, vllm.family) == ("vllm", "Qwen/Qwen3-VL-4B-Instruct", "qwen_vl")
+    assert (spec.runtime, spec.model, spec.family) == ("vllm", "Qwen/Qwen3-VL-4B-Instruct", "qwen_vl")
+    server = resolve("qwen3-vl-4b", runtime="llama_server")
+    assert (server.runtime, server.model, server.family) == ("llama_server", "Qwen3-VL-4B-Instruct", "qwen_vl")
 
 
 def test_resolve_catalog_server_and_cpu_runtimes(no_network) -> None:
@@ -60,7 +60,7 @@ def test_resolve_catalog_server_and_cpu_runtimes(no_network) -> None:
     )
     assert resolve("d1-omni-600m", runtime="ollama").model == "hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0"
     cpu = resolve("d1-3b", runtime="llama_cpp")
-    assert cpu.source.path == "d1-3B-Q8_0.gguf" and cpu.source.repo == "LiquidAI/d1-3B-GGUF"
+    assert cpu.family == "lfm2_vl" and cpu.source.path == "d1-3B-Q8_0.gguf" and cpu.source.repo == "LiquidAI/d1-3B-GGUF"
     assert HFRef.parse(cpu.options["mmproj"]).path == "mmproj-d1-3B-Q8_0.gguf"
     with pytest.raises(ValueError, match="no 'ollama' runtime"):
         resolve("d1-3b", runtime="ollama")
@@ -75,12 +75,13 @@ def test_unknown_name_suggests(no_network) -> None:
 
 def test_registry_validation(tmp_path: Path) -> None:
     bad = tmp_path / "r.yaml"
-    bad.write_text("m:\n  source: hf://a/b\n  family: magic\n  runtimes: {native: {}}\n", encoding="utf-8")
+    bad.write_text("m:\n  source: hf://a/b\n  family: magic\n  runtimes: {ollama: x}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="unknown family"):
         load_registry(bad)
-    bad.write_text("m:\n  source: hf://a/b\n  family: qwen_vl\n  runtimes: {tgi: x}\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="runtimes"):
-        load_registry(bad)
+    for runtimes in ("{tgi: x}", "{native: {}}"):
+        bad.write_text(f"m:\n  source: hf://a/b\n  family: qwen_vl\n  runtimes: {runtimes}\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="runtimes"):
+            load_registry(bad)
 
 
 # --- URIs ------------------------------------------------------------------------------------
@@ -131,26 +132,16 @@ def test_bad_uris(uri: str) -> None:
 # --- models outside the catalog --------------------------------------------------------------
 
 
-def test_unknown_hf_repo_guesses_family(monkeypatch) -> None:
-    monkeypatch.setattr(hub, "_fetch_config", lambda ref: {"model_type": "qwen3_vl"})
-    with pytest.warns(UncalibratedWarning):
-        spec = resolve("someone/qwen3-vl-finetune")
-    assert (spec.runtime, spec.family, spec.calibrated) == ("native", "qwen_vl", False)
-    with pytest.warns(UncalibratedWarning):
-        assert resolve("hf://someone/qwen3-vl-finetune@abc").source == HFRef("someone/qwen3-vl-finetune", "abc")
+@pytest.mark.parametrize("name", ["hf://someone/qwen3-vl-finetune@abc", "someone/llava"])
+def test_hf_repos_need_a_runtime(name: str, no_network) -> None:
+    with pytest.raises(ValueError, match="transformers runtime was removed"):
+        resolve(name)
 
 
-def test_unrecognized_architecture_falls_back(monkeypatch) -> None:
-    monkeypatch.setattr(hub, "_fetch_config", lambda ref: {"model_type": "llava", "architectures": ["LlavaForX"]})
-    with pytest.warns(UncalibratedWarning, match="generic option-letter readout"):
-        assert resolve("someone/llava").family == "semif_generic"
-
-
-def test_local_directory(tmp_path: Path, no_network) -> None:
+def test_local_directory_needs_a_runtime(tmp_path: Path, no_network) -> None:
     (tmp_path / "config.json").write_text(json.dumps({"architectures": ["Lfm2VlForConditionalGeneration"]}))
-    with pytest.warns(UncalibratedWarning):
-        spec = resolve(str(tmp_path))
-    assert (spec.runtime, spec.family, spec.source) == ("native", "lfm2_vl", None)
+    with pytest.raises(ValueError, match="transformers runtime was removed"):
+        resolve(str(tmp_path))
 
 
 # --- download --------------------------------------------------------------------------------
@@ -168,10 +159,10 @@ def test_download_goes_to_s1ght_cache(tmp_path: Path, monkeypatch) -> None:
         huggingface_hub, "hf_hub_download", lambda repo, f, **kw: calls.append((repo, f, kw)) or str(tmp_path / f)
     )
 
-    spec = resolve("d1-3b")
-    assert download(spec.source) == tmp_path / "snap"
+    source = load_registry()["d1-3b"].source
+    assert download(source) == tmp_path / "snap"
     repo, kw = calls[0]
-    assert repo == D1 and kw["revision"] == spec.source.revision and kw["cache_dir"] == tmp_path / "hub"
+    assert repo == D1 and kw["revision"] == source.revision and kw["cache_dir"] == tmp_path / "hub"
 
     gguf = resolve("d1-3b", runtime="llama_cpp").source
     assert download(gguf, cache=tmp_path / "other") == tmp_path / "d1-3B-Q8_0.gguf"
@@ -185,7 +176,7 @@ def test_download_goes_to_s1ght_cache(tmp_path: Path, monkeypatch) -> None:
 @pytest.mark.network
 def test_download_real_file(tmp_path: Path) -> None:
     """Fetch one small pinned file from Hugging Face into a fresh cache."""
-    ref = resolve("d1-omni-600m").source
+    ref = load_registry()["d1-omni-600m"].source
     path = download(HFRef(ref.repo, ref.revision, "config.json"), cache=tmp_path)
     assert path.is_file() and tmp_path in path.parents
     assert json.loads(path.read_text())["model_type"] == "d1_omni"

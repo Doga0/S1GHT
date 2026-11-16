@@ -13,9 +13,9 @@ asked, so each option is shown once at each letter and any per-letter bias cance
 (two options: the reversed order). Longer lists are asked once more in reverse, which
 cancels the bias between the ends but not for the middle options.
 
-This module only builds prompts and reads letters; it imports neither torch nor httpx, so
-the native families (`qwen_vl`, `semif_generic`) and the logprob server client
-(`runtimes/server/logprob.py`) send the same prompt and the same pixels, and agree.
+This module only builds prompts and reads letters; it imports no inference engine and no
+httpx, so every runtime that reads letters (the logprob server client in
+`runtimes/server/logprob.py`, and in-process runtimes) sends the same prompt and the same pixels.
 """
 
 from __future__ import annotations
@@ -229,7 +229,7 @@ def merge_token_scores(top: Sequence[tuple[str, float]]) -> dict[str, float]:
 
 def fit_image(img: Image | PILImage.Image, max_side: int = MAX_SIDE) -> PILImage.Image:
     """RGB image resized so its sides are multiples of 32, the longer one at most `max_side`,
-    and its area at least 256x256. Native and server runtimes send these exact pixels."""
+    and its area at least 256x256. Every runtime sends these exact pixels."""
     pil = img.to_pil() if isinstance(img, Image) else img
     if pil.mode != "RGB":
         pil = pil.convert("RGB")

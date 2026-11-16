@@ -45,4 +45,4 @@ From Python: `S1GHT("d1-omni-600m").serve(host="127.0.0.1", port=11436, api_key=
 
 ## Measured
 
-d1-omni-600M on a CPU laptop, official `typesafe-sdk` 0.7.5: Ollama runtime 20–43 s per photo with two questions, native 10–21 s, with the same answers as calling S1GHT directly.
+d1-omni-600M on a CPU laptop, official `typesafe-sdk` 0.7.5: Ollama runtime 20–43 s per photo with two questions, with the same answers as calling S1GHT directly.
