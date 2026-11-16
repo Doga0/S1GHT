@@ -3,7 +3,7 @@
 S1GHT speaks the TypeSafe `/v1/systemone` schema. A request is a **state** (what to look at) and a set of named **questions**; the response has one typed **answer** per question.
 
 ```python
-from s1ght import S1GHT, Image, Noul, Choice, Score, Box
+from s1ght import S1GHT, Image, Noul, Choice, Score, Box, Boxes
 
 model = S1GHT("d1-omni-600m")
 r = model.decide(state={"photo": Image("bus.jpg"), "note": "Camera 3, 08:14"}, questions={...})
@@ -63,7 +63,29 @@ Score("How crowded is the platform?", ["empty", "a few people", "busy", "packed"
 Box("the bus in `photo`")
 ```
 
-Answer: `BoxAnswer(box={"top": 0.21, "bottom": 0.78, "left": 0.05, "right": 0.97}, confidence=...)`, edges as fractions of the image. Box questions run only on runtimes that support them (TypeSafe `jev-preview`); others refuse them before sending. There is no "not found" answer, so pair a Box with a Noul that asks whether the target is there.
+Answer: `BoxAnswer(box={"top": 0.21, "bottom": 0.78, "left": 0.05, "right": 0.97}, confidence=..., found=..., present=...)`, edges as fractions of the image. What else comes with the box depends on the model:
+
+| Field | Meaning | Given by |
+| --- | --- | --- |
+| `confidence` | the model's score of the box | TypeSafe; H2O-Lightning (calibrated P(IoU ≥ 0.5)) |
+| `found` | probability that a box was located; `box` is None when nothing was found | d1-2B; H2O-Lightning (1.0 or 0.0) |
+| `present` | probability that the named object is visible, not a box score | H2O-Lightning |
+
+### Boxes: every instance of a target
+
+```python
+Boxes("every cat in `photo`", max=8)
+```
+
+Answer: `BoxesAnswer(boxes=[BoxAnswer(...), ...], count=2)`, one box per instance. `max` caps how many boxes are read (d1-2B reads at most 16); `count` is the model's own count, which can exceed the boxes read.
+
+Box and Boxes questions run only on runtimes that answer them (`caps.box`, `caps.boxes`); others refuse them before sending. They are never calibrated.
+
+| Runtime | Box | Boxes |
+| --- | --- | --- |
+| TypeSafe `jev-preview` | yes | no |
+| H2O-Lightning's shim (`h2o-lightning-4b`, `runtime="systemone"`) | yes | no |
+| llama-server, Ollama, Ollaya, vLLM | no | no |
 
 ## Questions in YAML or JSON
 

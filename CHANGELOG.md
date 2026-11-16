@@ -4,9 +4,18 @@ All notable changes to S1GHT. Versions follow [semantic versioning](https://semv
 
 ## [Unreleased]
 
+### Added
+
+- **`Boxes` questions** (every instance of a target, `max` boxes) with `BoxesAnswer(boxes, count)`, and the `boxes` capability.
+- **Richer box answers:** `BoxAnswer.box` is None when nothing was found, plus optional `found` and `present`.
+- **llama-server's own `/v1/systemone`** for decision models (images as `data:` URLs); chat VLMs keep the option-letter readout (`readout="letters"` forces it).
+- **`systemone` runtime** (`systemone://host:port`) for other TypeSafe-compatible servers, such as H2O-Lightning's shim; `box=` / `boxes=` declare what the server answers.
+- **Catalog:** `d1-2b` (llama-server) and `h2o-lightning-4b` (its shim with Box answers, or llama-server).
+
 ### Removed
 
-- **The native runtime** (in-process transformers: `runtime="native"`, the `native` extra, `hf://` URIs, Hugging Face repo ids and local model folders as model names). Models run through llama.cpp, Ollama, Ollaya, vLLM and TypeSafe; ONNX Runtime and OpenVINO follow. Catalog entries now default to their first remaining runtime (`d1-3b`: Ollaya, `d1-omni-600m`: Ollama, `qwen3-vl-4b`: vLLM).
+- **`qwen3-vl-4b` from the catalog:** it is a general VLM, not a decision model. Chat VLMs stay reachable by URI through the option-letter readout (`vllm://...`, `llama-server://...` with `readout="letters"`).
+- **The native runtime** (in-process transformers: `runtime="native"`, the `native` extra, `hf://` URIs, Hugging Face repo ids and local model folders as model names). Models run through llama.cpp, Ollama, Ollaya, vLLM and TypeSafe; ONNX Runtime and OpenVINO follow. Catalog entries now default to their first remaining runtime (`d1-3b`: Ollaya, `d1-omni-600m`: Ollama).
 
 ## [0.1.0] - 2026-10-26
 

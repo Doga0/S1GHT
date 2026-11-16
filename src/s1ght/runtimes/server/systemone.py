@@ -1,6 +1,6 @@
-"""`/v1/systemone` client for TypeSafe, Ollama and Ollaya.
+"""`/v1/systemone` client for TypeSafe, Ollama, Ollaya, llama-server and other servers.
 
-One client, three provider presets that differ in where images go:
+One client, provider presets that differ in where images go and what they answer:
 
 - **typesafe**: `POST {base}/v1/systemone`; images in `assets`, sent as multipart parts with
   the `TypeSafe-Danger-Zone-Images: true` header. Box questions need `jev-preview`/`jev-1.14.0`.
@@ -9,6 +9,12 @@ One client, three provider presets that differ in where images go:
 - **ollaya**: `POST {base}/api/decide`, because Ollaya's `/v1/systemone` is TypeSafe-identical
   and takes no images. Images go in `images` like Ollama and are re-encoded to PNG, the only
   format its vision runners read. The response is TypeSafe's plus extra fields, which are ignored.
+- **llama_server**: `POST {base}/v1/systemone` of llama.cpp's server, which reads decision
+  models itself (d1-2B, H2O-Lightning-4B, Kev, ...). Images as a top-level `images` list of
+  `data:` URLs (at most 8); Noul, Choice and Score only; the response has no `model`.
+- **systemone**: any other server that speaks TypeSafe's `/v1/systemone` with images inline
+  in `assets` (for example H2O-Lightning's shim, which also answers Box questions). What it
+  answers is not known in advance: pass `box=True` / `boxes=True` when it locates objects.
 
 Providers return calibrated probabilities. `raw()` turns them back into log-probabilities so
 S1GHT's own calibration can be fitted on top.
@@ -29,7 +35,7 @@ from s1ght.runtimes.base import Capabilities, RawScores, RuntimeBase, answers_to
 from s1ght.schema.assets import Image
 from s1ght.schema.systemone import Dialect, SystemOneRequest, SystemOneResponse
 
-Provider = Literal["typesafe", "ollama", "ollaya"]
+Provider = Literal["typesafe", "ollama", "ollaya", "llama_server", "systemone"]
 
 RETRY_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
 
@@ -45,6 +51,8 @@ class ProviderSpec:
     base_url_env: str
     api_key_env: str
     image_format: str | None = None  # re-encode every image to this format before sending
+    inline: bool = False  # TypeSafe dialect: images as `data_base64` in the JSON, not multipart
+    data_urls: bool = False  # Ollama dialect: images as `data:` URLs, not bare base64
 
 
 PROVIDERS: dict[str, ProviderSpec] = {
@@ -72,6 +80,24 @@ PROVIDERS: dict[str, ProviderSpec] = {
         base_url_env="OLLAYA_HOST",
         api_key_env="OLLAYA_API_KEY",
         image_format="png",
+    ),
+    "llama_server": ProviderSpec(
+        base_url="http://127.0.0.1:8080",
+        path="/v1/systemone",
+        dialect="ollama",
+        caps=Capabilities(images=True, raw_scores=True, max_options=255),
+        base_url_env="LLAMA_SERVER_URL",
+        api_key_env="LLAMA_API_KEY",
+        data_urls=True,
+    ),
+    "systemone": ProviderSpec(
+        base_url="http://127.0.0.1:8741",
+        path="/v1/systemone",
+        dialect="typesafe",
+        caps=Capabilities(images=True, raw_scores=True, max_options=255),
+        base_url_env="SYSTEMONE_URL",
+        api_key_env="SYSTEMONE_API_KEY",
+        inline=True,
     ),
 }
 
@@ -117,14 +143,17 @@ class SystemOneClient(RuntimeBase):
     """Runtime backed by a `/v1/systemone` provider.
 
     Args:
-        provider: "typesafe", "ollama" or "ollaya".
+        provider: "typesafe", "ollama", "ollaya", "llama_server" or "systemone".
         model: Model name on that provider, e.g. "jev-preview", "clef-flash", "d1:3b-vision".
             Every request is sent with this model.
         base_url: Server URL; defaults to the provider's env var (`TYPESAFE_BASE_URL`,
-            `OLLAMA_HOST`, `OLLAYA_HOST`), then its standard address.
-        api_key: Bearer token; defaults to `TYPESAFE_API_KEY` / `OLLAMA_API_KEY` / `OLLAYA_API_KEY`.
-        timeout: Seconds per HTTP request; default 60 for TypeSafe and 300 for local Ollama and
-            Ollaya servers, which may run on a CPU.
+            `OLLAMA_HOST`, `OLLAYA_HOST`, `LLAMA_SERVER_URL`, `SYSTEMONE_URL`), then its
+            standard address.
+        api_key: Bearer token; defaults to the provider's `*_API_KEY` env var.
+        timeout: Seconds per HTTP request; default 60 for TypeSafe and 300 for local servers,
+            which may run on a CPU.
+        box: Whether the server answers Box questions; None keeps the provider's default.
+        boxes: Whether the server answers Boxes questions; None keeps the provider's default.
         max_retries: Retries on 408, 429 and 5xx, honouring `Retry-After`.
         backoff: First retry delay in seconds; doubles each retry.
         transport: Optional httpx transport (tests use `httpx.MockTransport`).
@@ -138,6 +167,8 @@ class SystemOneClient(RuntimeBase):
         base_url: str | None = None,
         api_key: str | None = None,
         timeout: float | None = None,
+        box: bool | None = None,
+        boxes: bool | None = None,
         max_retries: int = 2,
         backoff: float = 0.5,
         transport: httpx.BaseTransport | None = None,
@@ -146,7 +177,11 @@ class SystemOneClient(RuntimeBase):
             raise ValueError(f"unknown provider {provider!r}; expected one of {sorted(PROVIDERS)}")
         self.provider = provider
         self.spec = PROVIDERS[provider]
-        self.caps = self.spec.caps
+        self.caps = replace(
+            self.spec.caps,
+            box=self.spec.caps.box if box is None else box,
+            boxes=self.spec.caps.boxes if boxes is None else boxes,
+        )
         self.model = model
         self.base_url = _normalize_url(base_url or os.environ.get(self.spec.base_url_env) or self.spec.base_url)
         api_key = api_key if api_key is not None else os.environ.get(self.spec.api_key_env)
@@ -166,7 +201,7 @@ class SystemOneClient(RuntimeBase):
         return req
 
     def _post(self, req: SystemOneRequest) -> httpx.Response:
-        body, parts = req.to_wire(self.spec.dialect)
+        body, parts = req.to_wire(self.spec.dialect, inline=self.spec.inline, data_urls=self.spec.data_urls)
         headers = {}
         if self.spec.dialect == "typesafe" and req.needs_images_flag:
             headers["TypeSafe-Danger-Zone-Images"] = "true"
@@ -209,7 +244,7 @@ class SystemOneClient(RuntimeBase):
             raise SystemOneError(resp.status_code, f"malformed response: {e}", body=resp.text) from e
 
     def raw(self, req: SystemOneRequest) -> RawScores:
-        """Log-probabilities of the provider's answers, in `RawScores` option order (Box questions skipped)."""
+        """Log-probabilities of the provider's answers, in `RawScores` option order (Box/Boxes skipped)."""
         return answers_to_raw(req.questions, self.decide(req).answers)
 
     def close(self) -> None:

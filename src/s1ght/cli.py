@@ -138,7 +138,7 @@ def increment(path: Path) -> Path:
 
 
 def format_answer(a: Any) -> str:
-    from s1ght.schema.systemone import BoxAnswer, ChoiceAnswer, NoulAnswer, ScoreAnswer
+    from s1ght.schema.systemone import BoxAnswer, BoxesAnswer, ChoiceAnswer, NoulAnswer, ScoreAnswer
 
     if isinstance(a, NoulAnswer):
         return f"{a.noul:.2f}"
@@ -148,7 +148,11 @@ def format_answer(a: Any) -> str:
         return f"{a.score:.2f}"
     if isinstance(a, BoxAnswer):
         b = a.box
+        if b is None:
+            return "box[none]"
         return f"box[{b['left']:.2f},{b['top']:.2f},{b['right']:.2f},{b['bottom']:.2f}]"
+    if isinstance(a, BoxesAnswer):
+        return f"boxes[{a.count}]"
     return str(a)
 
 

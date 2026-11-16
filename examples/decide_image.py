@@ -1,7 +1,7 @@
 """One decision about one image, in the TypeSafe format.
 
 python examples/decide_image.py                                   # d1-omni-600m in Ollama
-python examples/decide_image.py --model qwen3-vl-4b --image my.jpg
+python examples/decide_image.py --model d1-2b --image my.jpg
 """
 
 import argparse

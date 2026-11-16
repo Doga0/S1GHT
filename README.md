@@ -7,7 +7,7 @@
 
 S1GHT asks decision models typed questions about images and video: *is this person wearing a hard hat?*, *which of these four is the scene?*, *how crowded is it, from 0 to 3?* Answers are calibrated probabilities, not generated text. On video, a detector tracks objects and S1GHT asks about each track in the background, so the detector never waits for the decision model.
 
-- **One question format.** Questions and answers follow the TypeSafe `/v1/systemone` schema (`noul`, `choice`, `score`, `box`). The same request runs on a local model, on Ollama/Ollaya, on vLLM or llama-server, or on TypeSafe's hosted API.
+- **One question format.** Questions and answers follow the TypeSafe `/v1/systemone` schema (`noul`, `choice`, `score`, `box`, `boxes`). The same request runs on a local model, on Ollama/Ollaya, on vLLM or llama-server, or on TypeSafe's hosted API.
 - **Ultralytics-style API.** `S1GHT("d1-3b")`, `.decide()`, `.predict()`, `.track(stream=True)`, `Results.plot()`, and a `s1ght MODE key=value` command line.
 - **Hybrid mode.** A YOLO detector tracks objects; a scheduler picks which tracks to ask about (new, changed, uncertain, stale) within a decisions-per-second budget; answers are smoothed over time and turned into events.
 - **Calibration.** Fit temperatures on held-out examples and get ECE and Brier scores before and after.
@@ -82,7 +82,8 @@ s1ght decide model=d1-omni-600m runtime=ollama source=bus.jpg questions=examples
 | `Noul(instructions, criteria=None)` | yes or no | `noul`: probability of yes |
 | `Choice(instructions, criteria)` | one of 2–255 options | `choice`, `probabilities`, `confidence` |
 | `Score(instructions, criteria)` | an ordered level, 2–10 levels, lowest first | `score` (expected level), `probabilities`, `confidence` |
-| `Box(instructions)` | where one target is | `box`: `top`, `bottom`, `left`, `right` as fractions (TypeSafe `jev-preview` only) |
+| `Box(instructions)` | where one target is | `box`: `top`, `bottom`, `left`, `right` as fractions (TypeSafe `jev-preview`, H2O-Lightning's shim) |
+| `Boxes(instructions, max=None)` | every instance of a target | `boxes` (one box each), `count` (runtimes that declare `boxes`) |
 
 The `state` holds one or more `Image`s, optionally with text or JSON context (a camera name, a zone); questions refer to images by their key (`` `photo` ``). Questions can also live in YAML:
 
@@ -139,7 +140,8 @@ A model name picks the weights; a **runtime** picks what runs them.
 | --- | --- | --- | --- |
 | `d1-3b` | LiquidAI/d1-3B | ollaya, llama_cpp | LFM Open License 1.0 |
 | `d1-omni-600m` | LiquidAI/d1-omni-600M | ollama, llama_cpp | LFM Open License 1.0 |
-| `qwen3-vl-4b` | Qwen/Qwen3-VL-4B-Instruct | vllm, llama_server | Apache-2.0 |
+| `d1-2b` | LiquidAI/d1-2B | llama_server, llama_cpp | LFM Open License 1.0 |
+| `h2o-lightning-4b` | h2oai/h2o-lightning-4b | systemone, llama_server | Apache-2.0 |
 
 The LFM Open License 1.0 does not cover commercial use by organizations with more than US$10M annual revenue. Every catalog entry is pinned to a Hugging Face commit.
 
@@ -147,7 +149,8 @@ The LFM Open License 1.0 does not cover commercial use by organizations with mor
 S1GHT("d1-3b")  # the first runtime: Ollaya at 127.0.0.1:11435
 S1GHT("ollama://hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0")  # any Ollama tag
 S1GHT("vllm://localhost:8000/Qwen/Qwen3-VL-4B-Instruct")  # vLLM
-S1GHT("llama-server://localhost:8080")  # llama.cpp server
+S1GHT("llama-server://localhost:8080")  # llama.cpp server: its own /v1/systemone
+S1GHT("h2o-lightning-4b")  # H2O-Lightning's shim at 127.0.0.1:8741, with Box answers
 S1GHT("typesafe://jev-preview")  # TypeSafe hosted (TYPESAFE_API_KEY)
 ```
 

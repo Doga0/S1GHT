@@ -29,7 +29,8 @@ def no_network(monkeypatch):
 
 def test_registry_entries_are_pinned_and_known() -> None:
     reg = load_registry()
-    assert {"d1-3b", "qwen3-vl-4b", "d1-omni-600m"} <= set(reg)
+    assert {"d1-3b", "d1-omni-600m", "d1-2b", "h2o-lightning-4b"} <= set(reg)
+    assert "qwen3-vl-4b" not in reg  # a general VLM, not a decision model
     for e in reg.values():
         assert e.source.pinned, e.name
         assert e.family in hub.FAMILIES
@@ -45,13 +46,6 @@ def test_resolve_d1_3b_defaults_to_first_runtime(no_network) -> None:
     assert (spec.runtime, spec.model, spec.calibrated) == ("ollaya", "d1:3b-vision", False)
     assert resolve("D1-3B") == spec
     assert load_registry()["d1-3b"].source == HFRef(D1, "051bcc464b01b9f92942b364d9586b0ef5912432")
-
-
-def test_resolve_qwen3_vl_4b(no_network) -> None:
-    spec = resolve("qwen3-vl-4b")
-    assert (spec.runtime, spec.model, spec.family) == ("vllm", "Qwen/Qwen3-VL-4B-Instruct", "qwen_vl")
-    server = resolve("qwen3-vl-4b", runtime="llama_server")
-    assert (server.runtime, server.model, server.family) == ("llama_server", "Qwen3-VL-4B-Instruct", "qwen_vl")
 
 
 def test_resolve_catalog_server_and_cpu_runtimes(no_network) -> None:
@@ -109,6 +103,13 @@ def test_hfref_parse_roundtrip(uri: str, ref: HFRef) -> None:
         ("ollama://hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0", "ollama", "hf.co/LiquidAI/d1-omni-600M-GGUF:Q8_0", None),
         ("ollaya://d1:3b-vision", "ollaya", "d1:3b-vision", None),
         ("typesafe://jev-preview", "typesafe", "jev-preview", None),
+        (
+            "systemone://127.0.0.1:8741/h2oai/h2o-lightning-4b",
+            "systemone",
+            "h2oai/h2o-lightning-4b",
+            "http://127.0.0.1:8741",
+        ),
+        ("systemone://gpu-box:8741", "systemone", "default", "http://gpu-box:8741"),
         (
             "vllm://localhost:8000/Qwen/Qwen3-VL-4B-Instruct",
             "vllm",
@@ -194,6 +195,22 @@ def test_load_runtime_server(no_network) -> None:
     rt.close()
 
 
+def test_box_models_in_the_catalog(no_network) -> None:
+    h2o = load_runtime("h2o-lightning-4b")  # the model's shim: Box answers
+    assert isinstance(h2o, SystemOneClient) and h2o.provider == "systemone" and h2o.caps.box and not h2o.caps.boxes
+    assert h2o.base_url == "http://127.0.0.1:8741" and h2o.model == "h2oai/h2o-lightning-4b"
+    h2o.close()
+    plain = load_runtime("h2o-lightning-4b", runtime="llama_server")  # llama-server has no box question
+    assert isinstance(plain, SystemOneClient) and plain.provider == "llama_server" and not plain.caps.box
+    plain.close()
+    d1 = load_runtime("d1-2b")
+    assert isinstance(d1, SystemOneClient) and d1.provider == "llama_server" and d1.model == "d1-2B"
+    d1.close()
+    custom = load_runtime("systemone://127.0.0.1:9000/m", box=True, boxes=True)
+    assert custom.caps.box and custom.caps.boxes
+    custom.close()
+
+
 def test_load_runtime_logprob_servers(no_network) -> None:
     from s1ght.runtimes.server.logprob import LogprobClient
 
@@ -201,12 +218,14 @@ def test_load_runtime_logprob_servers(no_network) -> None:
     assert isinstance(rt, LogprobClient) and rt.server == "vllm" and rt.base_url == "http://localhost:8000"
     assert rt.model == "Qwen/Qwen3-VL-4B-Instruct"
     rt.close()
-    rt = load_runtime("llama-server://127.0.0.1:8081")
+    rt = load_runtime("llama-server://127.0.0.1:8081", readout="letters")
     assert rt.server == "llama_server" and rt.base_url == "http://127.0.0.1:8081"  # type: ignore[attr-defined]
     rt.close()
-    rt = load_runtime("qwen3-vl-4b", runtime="llama_server")
-    assert rt.base_url == "http://127.0.0.1:8080" and rt.model == "Qwen3-VL-4B-Instruct"  # type: ignore[attr-defined]
+    rt = load_runtime("llama-server://127.0.0.1:8081")  # a decision model: the server's own /v1/systemone
+    assert isinstance(rt, SystemOneClient) and rt.provider == "llama_server" and not rt.caps.box
     rt.close()
+    with pytest.raises(ValueError, match="readout"):
+        load_runtime("llama-server://127.0.0.1:8081", readout="tokens")
     with pytest.raises(ValueError, match="llama-server://host:port"):
         resolve("llama-server:///model")
     with pytest.raises(NotImplementedError, match="llama_cpp"):
