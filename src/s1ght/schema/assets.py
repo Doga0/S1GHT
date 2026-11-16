@@ -123,5 +123,10 @@ class Image:
         with PILImage.open(io.BytesIO(self._encoded())) as im:
             return im.size
 
+    @property
+    def mime(self) -> str:
+        """Media type of `to_bytes()`, e.g. "image/jpeg"."""
+        return "image/jpeg" if self.format in ("jpg", "jpeg") else f"image/{self.format}"
+
     def __repr__(self) -> str:
         return f"Image(ref={self.ref!r}, format={self.format!r})"

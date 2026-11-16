@@ -1,4 +1,4 @@
-"""Typed System One questions: Noul, Choice, Score and Box.
+"""Typed System One questions: Noul, Choice, Score, Box and Boxes.
 
 Field names match the TypeSafe `/v1/systemone` wire format one to one. `instructions` and
 `criteria` may be strings, nested dicts/lists, or contain `Image` objects anywhere a value
@@ -123,10 +123,36 @@ class Box:
         return {"type": "box", "instructions": self.instructions}
 
 
-Question: TypeAlias = Noul | Choice | Score | Box
+@dataclass(frozen=True)
+class Boxes:
+    """Find every instance of a target in an image; the answer is a list of boxes and a count.
+
+    Args:
+        instructions: What to find, e.g. "every cat in `photo`".
+        max: Most boxes to read; None leaves it to the model (d1-2B reads at most 16).
+    """
+
+    instructions: str
+    max: int | None = None
+
+    def __post_init__(self) -> None:
+        _check_instructions(self.instructions)
+        if self.max is not None and (isinstance(self.max, bool) or not isinstance(self.max, int) or self.max < 1):
+            raise ValueError(f"Boxes max must be a positive int, got {self.max!r}")
+
+    def to_wire(self) -> dict[str, Any]:
+        wire: dict[str, Any] = {"type": "boxes", "instructions": self.instructions}
+        if self.max is not None:
+            wire["max"] = self.max
+        return wire
+
+
+Question: TypeAlias = Noul | Choice | Score | Box | Boxes
 QuestionSet = dict[str, Question]
 
-QUESTION_TYPES: dict[str, type] = {"noul": Noul, "choice": Choice, "score": Score, "box": Box}
+QUESTION_TYPES: dict[str, type] = {"noul": Noul, "choice": Choice, "score": Score, "box": Box, "boxes": Boxes}
+LOCATING = (Box, Boxes)
+"""Questions answered with boxes rather than option probabilities: never logits, never calibrated."""
 
 
 def question_from_wire(data: dict[str, Any]) -> Question:

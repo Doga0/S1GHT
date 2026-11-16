@@ -7,7 +7,8 @@ Two dialects of `/v1/systemone` are supported:
   Sent as multipart (`part`) or inline JSON (`data_base64` + `format`).
 - "ollama": images are a top-level `images` list of base64 strings shared by every
   question. There are no references, so each image is written as "[image N]" (1-based,
-  list order) where it appeared. Ollama has no Box question.
+  list order) where it appeared. llama-server reads the same body with every image as a
+  `data:` URL (`data_urls=True`). Neither has Box or Boxes questions.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
 from s1ght.schema.assets import Image
-from s1ght.schema.questions import Box, QuestionSet, question_from_wire
+from s1ght.schema.questions import LOCATING, QuestionSet, question_from_wire
 
 Dialect = Literal["typesafe", "ollama"]
 
@@ -95,10 +96,15 @@ class SystemOneRequest:
     @property
     def needs_images_flag(self) -> bool:
         """True when TypeSafe needs the `TypeSafe-Danger-Zone-Images: true` header."""
-        return bool(self.assets()) or any(isinstance(q, Box) for q in self.questions.values())
+        return bool(self.assets()) or any(isinstance(q, LOCATING) for q in self.questions.values())
 
     def to_wire(
-        self, dialect: Dialect = "typesafe", *, inline: bool = False, embed_images: bool = True
+        self,
+        dialect: Dialect = "typesafe",
+        *,
+        inline: bool = False,
+        embed_images: bool = True,
+        data_urls: bool = False,
     ) -> tuple[dict, dict[str, bytes]]:
         """Encode for the wire.
 
@@ -108,6 +114,7 @@ class SystemOneRequest:
                 (default) returns them as multipart parts named by their reference.
             embed_images: Ollama only. False writes the "[image N]" labels but leaves out the
                 base64 `images` list, for in-process runtimes that take `assets()` directly.
+            data_urls: Ollama dialect only. True sends each image as a `data:` URL (llama-server).
 
         Returns:
             (JSON body, multipart parts). Parts are empty for inline and Ollama requests.
@@ -138,9 +145,9 @@ class SystemOneRequest:
             return body, parts
 
         if dialect == "ollama":
-            boxes = [qid for qid, q in self.questions.items() if isinstance(q, Box)]
+            boxes = [qid for qid, q in self.questions.items() if isinstance(q, LOCATING)]
             if boxes:
-                raise ValueError(f"Ollama does not support Box questions: {boxes}")
+                raise ValueError(f"the ollama dialect has no Box or Boxes questions: {boxes}")
             labels = {r: f"[image {i}]" for i, r in enumerate(assets, 1)}
             inline_refs = [img.ref for img in self.extra_assets]
 
@@ -158,7 +165,10 @@ class SystemOneRequest:
                 "questions": {qid: _walk(q.to_wire(), label, on_str) for qid, q in self.questions.items()},
             }
             if assets and embed_images:
-                body["images"] = [_b64(img.to_bytes()) for img in assets.values()]
+                body["images"] = [
+                    f"data:{img.mime};base64,{_b64(img.to_bytes())}" if data_urls else _b64(img.to_bytes())
+                    for img in assets.values()
+                ]
             return body, {}
 
         raise ValueError(f"unknown dialect {dialect!r}")
@@ -269,16 +279,58 @@ class ScoreAnswer:
 
 @dataclass
 class BoxAnswer:
-    """Four edges as fractions of the image: top, bottom (height), left, right (width)."""
+    """Four edges as fractions of the image: top, bottom (height), left, right (width).
 
-    box: dict[str, float]
-    confidence: float
+    Attributes:
+        box: The edges, or None when the model found nothing (d1-2B: `found` under 0.5).
+        confidence: The model's score of the box, if it gives one (H2O-Lightning: calibrated
+            P(IoU >= 0.5); TypeSafe: its confidence).
+        found: Probability that a box was located (a bool on the wire becomes 1.0 or 0.0).
+        present: Probability that the named object is visible (H2O-Lightning); not a box score.
+    """
+
+    box: dict[str, float] | None
+    confidence: float | None = None
+    found: float | None = None
+    present: float | None = None
+
+    @classmethod
+    def from_wire(cls, data: dict[str, Any]) -> BoxAnswer:
+        box = data.get("box")
+        if box is None and "top" in data:  # a bare box, as list answers may carry them
+            box = {k: data[k] for k in ("top", "bottom", "left", "right")}
+        return cls(
+            box={k: float(v) for k, v in box.items()} if box is not None else None,
+            confidence=_maybe_float(data.get("confidence")),
+            found=_maybe_float(data.get("found")),
+            present=_maybe_float(data.get("present")),
+        )
 
     def to_wire(self) -> dict[str, Any]:
-        return {"type": "box", "box": self.box, "confidence": self.confidence}
+        wire: dict[str, Any] = {"type": "box", "box": self.box}
+        for key in ("confidence", "found", "present"):
+            if getattr(self, key) is not None:
+                wire[key] = getattr(self, key)
+        return wire
 
 
-Answer: TypeAlias = NoulAnswer | ChoiceAnswer | ScoreAnswer | BoxAnswer
+@dataclass
+class BoxesAnswer:
+    """Every instance found: one `BoxAnswer` per instance, and the model's count."""
+
+    boxes: list[BoxAnswer]
+    count: int
+
+    def to_wire(self) -> dict[str, Any]:
+        items = [{k: v for k, v in b.to_wire().items() if k != "type"} for b in self.boxes]
+        return {"type": "boxes", "boxes": items, "count": self.count}
+
+
+def _maybe_float(v: Any) -> float | None:
+    return None if v is None else float(v)
+
+
+Answer: TypeAlias = NoulAnswer | ChoiceAnswer | ScoreAnswer | BoxAnswer | BoxesAnswer
 
 
 def answer_from_wire(data: dict[str, Any]) -> Answer:
@@ -296,7 +348,10 @@ def answer_from_wire(data: dict[str, Any]) -> Answer:
             confidence=data["confidence"],
         )
     if kind == "box":
-        return BoxAnswer(box=data["box"], confidence=data["confidence"])
+        return BoxAnswer.from_wire(data)
+    if kind == "boxes":
+        boxes = [BoxAnswer.from_wire(b) for b in data.get("boxes") or []]
+        return BoxesAnswer(boxes=boxes, count=int(data.get("count", len(boxes))))
     raise ValueError(f"unknown answer type {kind!r}")
 
 
@@ -311,7 +366,7 @@ class SystemOneResponse:
     @classmethod
     def from_wire(cls, data: dict[str, Any]) -> SystemOneResponse:
         return cls(
-            model=data["model"],
+            model=str(data.get("model", "")),  # llama-server sends none
             answers={qid: answer_from_wire(a) for qid, a in data["answers"].items()},
             usage=dict(data.get("usage", {})),
         )

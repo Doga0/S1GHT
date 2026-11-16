@@ -36,12 +36,24 @@ d1-omni-600m:
   license: lfm1.0
   notes: Early research release. LFM Open License 1.0 does not cover commercial use by organizations with US$10M+ annual revenue.
 
-qwen3-vl-4b:
-  source: hf://Qwen/Qwen3-VL-4B-Instruct@ebb281ec70b05090aa6165b016eac8ec08e71b17
-  family: qwen_vl
+d1-2b:
+  source: hf://LiquidAI/d1-2B@a6bce774e6dde338dcc3036ceb5d91f78bf4c19e
+  family: lfm3_vl
   runtimes:
-    vllm: {model: Qwen/Qwen3-VL-4B-Instruct}
-    llama_server: {model: Qwen3-VL-4B-Instruct}   # llama-server -hf Qwen/Qwen3-VL-4B-Instruct-GGUF:Q8_0
+    llama_server: {model: d1-2B}   # llama-server -hf LiquidAI/d1-2B-GGUF:Q8_0 -b 8192 -ub 8192 (build b11960+)
+    llama_cpp:
+      gguf: hf://LiquidAI/d1-2B-GGUF@4a181094d1b6addfaa3a0956f78e7ab2aa406a0c/d1-2B-Q8_0.gguf
+      mmproj: hf://LiquidAI/d1-2B-GGUF@4a181094d1b6addfaa3a0956f78e7ab2aa406a0c/mmproj-d1-2B-Q8_0.gguf
+  calibration: null
+  license: lfm1.0
+  notes: Answers box and boxes in its own engine; llama.cpp serves only noul, choice and score so far. LFM Open License 1.0 does not cover commercial use by organizations with US$10M+ annual revenue.
+
+h2o-lightning-4b:
+  source: hf://h2oai/h2o-lightning-4b@ee4e0e624a0c62a803df878536bd1b59a40cc9f7   # v1.4.2
+  family: h2o_lightning
+  runtimes:
+    systemone: {model: h2oai/h2o-lightning-4b, base_url: "http://127.0.0.1:8741", box: true}   # the model's shim: bash serve.sh
+    llama_server: {model: h2o-lightning-4b}   # llama-server -hf h2oai/h2o-lightning-4b-gguf:Q8_0 (build b11773+); no box
   calibration: null
   license: apache-2.0
-  notes: General VLM read with option-letter logits (SemIf contract); thinking must be off.
+  notes: Box answers come from the model's own shim (vLLM, or a pinned llama.cpp with the stock- GGUF); llama-server alone has no box question.

@@ -11,7 +11,7 @@ from typing import Protocol, Self, runtime_checkable
 
 import numpy as np
 
-from s1ght.schema.questions import Box, Choice, Noul, Question, QuestionSet, Score
+from s1ght.schema.questions import Box, Boxes, Choice, Noul, Question, QuestionSet, Score
 from s1ght.schema.systemone import (
     Answer,
     ChoiceAnswer,
@@ -32,7 +32,8 @@ class Capabilities:
 
     Attributes:
         images: Accepts images in requests.
-        box: Answers Box questions.
+        box: Answers Box questions (one object).
+        boxes: Answers Boxes questions (every instance).
         batch: `decide_batch` runs requests together rather than one by one.
         prefix_cache: Reuses the encoded image/state across questions.
         attention: Exposes attention maps (in-process, eager attention).
@@ -44,6 +45,7 @@ class Capabilities:
 
     images: bool = False
     box: bool = False
+    boxes: bool = False
     batch: bool = False
     prefix_cache: bool = False
     attention: bool = False
@@ -85,6 +87,8 @@ def validate_request(caps: Capabilities, req: SystemOneRequest) -> None:
     for qid, q in req.questions.items():
         if isinstance(q, Box):
             require(caps, {"box"}, f"Box question {qid!r}")
+        if isinstance(q, Boxes):
+            require(caps, {"boxes"}, f"Boxes question {qid!r}")
         if isinstance(q, Choice) and len(q.criteria) > caps.max_options:
             raise ValueError(f"Choice {qid!r} has {len(q.criteria)} options; this runtime allows {caps.max_options}")
 
@@ -115,7 +119,7 @@ def score_to_answer(question: Question, logits: np.ndarray, temperature: float =
     """Turn one question's logits into a TypeSafe answer.
 
     Args:
-        question: Noul, Choice or Score (Box answers are not logit-based).
+        question: Noul, Choice or Score (Box and Boxes answers are not logit-based).
         logits: One logit per option, in `RawScores` order.
         temperature: Calibration temperature; logits are divided by it before softmax.
     """
@@ -154,7 +158,7 @@ def answers_to_raw(questions: QuestionSet, answers: dict[str, Answer], eps: floa
 
     For back ends that only return probabilities (servers, a model's own readout): softmax of
     these logs gives the probabilities back, so S1GHT's calibration can be applied on top.
-    Box answers and missing answers are skipped.
+    Box/Boxes answers and missing answers are skipped.
     """
     scores: dict[str, np.ndarray] = {}
     for qid, q in questions.items():

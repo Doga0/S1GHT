@@ -10,7 +10,8 @@ A **model** is a set of weights; a **runtime** is what runs them. The same model
 | --- | --- | --- | --- | --- |
 | `d1-3b` | LiquidAI/d1-3B | ollaya, llama_cpp | the model's own `system_one` engine | LFM Open License 1.0 |
 | `d1-omni-600m` | LiquidAI/d1-omni-600M | ollama, llama_cpp | the model's own `system_one` engine | LFM Open License 1.0 |
-| `qwen3-vl-4b` | Qwen/Qwen3-VL-4B-Instruct | vllm, llama_server | option-letter logits | Apache-2.0 |
+| `d1-2b` | LiquidAI/d1-2B | llama_server, llama_cpp | the model's own engine (in llama-server) | LFM Open License 1.0 |
+| `h2o-lightning-4b` | h2oai/h2o-lightning-4b (v1.4.2) | systemone, llama_server | the model's own engine (its shim, or llama-server) | Apache-2.0 |
 
 S1GHT uses every model for visual decisions: images, with optional text context next to them. Other inputs some checkpoints accept (d1-omni-600M also reads audio) are outside S1GHT's scope.
 
@@ -30,7 +31,8 @@ S1GHT("ollama://clef-flash")  # a URI: no catalog needed
 | `ollaya` | `runtime="ollaya"`, `ollaya://<tag>` | Ollaya's `/api/decide` | `OLLAYA_HOST` (default `127.0.0.1:11435`); images re-encoded to PNG |
 | `typesafe` | `typesafe://<model>` | TypeSafe's hosted `/v1/systemone` | `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`; images 280–1568 px per side; Box on `jev-preview` |
 | `vllm` | `runtime="vllm"`, `vllm://host:port/<model>` | OpenAI-compatible chat with top log-probabilities | `vllm serve ... --max-logprobs 20` |
-| `llama_server` | `runtime="llama_server"`, `llama-server://host:port` | llama.cpp's server, same client | `llama-server -m model.gguf --mmproj mmproj.gguf` |
+| `llama_server` | `runtime="llama_server"`, `llama-server://host:port` | llama.cpp's server: its own `/v1/systemone` for decision models (images as `data:` URLs, at most 8); option-letter logprobs for chat VLMs with `readout="letters"` | `llama-server -hf <repo>:Q8_0`; no Box |
+| `systemone` | `runtime="systemone"`, `systemone://host:port[/<model>]` | any other server speaking TypeSafe's `/v1/systemone`, images inline | `SYSTEMONE_URL` (default `127.0.0.1:8741`); pass `box=True` / `boxes=True` when it answers them |
 
 Server runtimes take `base_url=`, `api_key=` and `timeout=`:
 
@@ -44,7 +46,7 @@ S1GHT("d1-omni-600m", runtime="ollama", base_url="http://gpu-box:11434", timeout
 
 ```bash
 s1ght bench model=d1-omni-600m runtime=ollama sizes=[256,640] batches=[1,4]
-python benchmarks/latency.py d1-omni-600m:ollama qwen3-vl-4b:llama_server
+python benchmarks/latency.py d1-omni-600m:ollama d1-2b:llama_server
 ```
 
 d1-omni-600M on a laptop CPU (Intel Core i7-13700H, 32 GB), one Noul per image, warm median ms per image:
@@ -71,13 +73,15 @@ These models are **uncalibrated**: their probabilities should be calibrated befo
 
 ## Option-letter models (vLLM, llama-server)
 
+General chat VLMs are not decision models, so the catalog lists none; reach one by URI when you need it as a reference.
+
 General chat VLMs have no decision head. S1GHT turns each question into a multiple-choice prompt (the state, the images, and the options lettered A, B, C, ...) and reads the next-token probabilities of the letters. Nothing is generated, so one question costs one forward pass. Thinking is turned off for Qwen3.
 
 Letter models prefer "A" (about +2.4 nat on Qwen3-VL-4B). When a reading is close (top-two gap under 6 nat), S1GHT asks again with the options in other orders and averages: every cyclic rotation for up to 4 options, which cancels a per-letter bias exactly, else the reversed order.
 
 ```python
-S1GHT("qwen3-vl-4b", flip="auto")  # default; "always" or "never"
-S1GHT("qwen3-vl-4b", margin=4.0, max_side=768)
+S1GHT("vllm://localhost:8000/Qwen/Qwen3-VL-4B-Instruct", flip="auto")  # default; "always" or "never"
+S1GHT("llama-server://localhost:8080", readout="letters", margin=4.0, max_side=768)
 ```
 
 | Option | Default | Meaning |

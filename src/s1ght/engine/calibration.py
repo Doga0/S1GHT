@@ -38,7 +38,7 @@ import numpy as np
 from s1ght.engine.crops import crop
 from s1ght.runtimes.base import Capabilities, RawScores, Runtime, RuntimeBase, scores_to_answers
 from s1ght.schema.assets import Image
-from s1ght.schema.questions import Box, Choice, Noul, Question, Score, question_from_wire
+from s1ght.schema.questions import LOCATING, Box, Boxes, Choice, Noul, Question, Score, question_from_wire
 from s1ght.schema.systemone import SystemOneRequest, SystemOneResponse
 
 PROFILE_VERSION = 1
@@ -67,7 +67,7 @@ class Example:
 
 
 def _type(q: Question) -> str:
-    return {Noul: "noul", Choice: "choice", Score: "score", Box: "box"}[type(q)]
+    return {Noul: "noul", Choice: "choice", Score: "score", Box: "box", Boxes: "boxes"}[type(q)]
 
 
 def label_index(q: Question, label: Any) -> int:
@@ -85,7 +85,7 @@ def label_index(q: Question, label: Any) -> int:
         if not isinstance(label, int) or not 0 <= label < len(q.criteria):
             raise ValueError(f"score labels are level indices 0..{len(q.criteria) - 1}, got {label!r}")
         return label
-    raise TypeError("Box questions are not calibrated")
+    raise TypeError("Box and Boxes questions are not calibrated")
 
 
 def load_examples(path: str | Path) -> list[Example]:
@@ -326,14 +326,16 @@ def calibrate(
 
     Args:
         runtime: A runtime with raw scores.
-        examples: Labeled examples (`load_examples`); Box questions are skipped.
+        examples: Labeled examples (`load_examples`); Box and Boxes questions are skipped.
         model, runtime_name, source: What the profile is bound to (`source` should pin the version).
         folds: k for out-of-fold evaluation when there is no "test" split.
         batch: Requests per runtime call.
         dataset: Description stored in the profile (path, sha256, ...).
     """
     check_pinned(model, source)
-    scored = collect(runtime, [e for e in examples if not isinstance(e.question, Box)], batch=batch, progress=progress)
+    scored = collect(
+        runtime, [e for e in examples if not isinstance(e.question, LOCATING)], batch=batch, progress=progress
+    )
     temps: dict[str, float] = {}
     report: dict[str, dict[str, Any]] = {}
     for key in sorted({s.key for s in scored}):
@@ -410,7 +412,7 @@ class CalibratedRuntime(RuntimeBase):
         kind = input_kind(req, self.input_kind)
         temps = {qid: self.profile.temperature(req.questions[qid], kind) for qid in raw.scores}
         answers = dict(scores_to_answers(req.questions, raw, temps))
-        boxes: dict[str, Question] = {qid: q for qid, q in req.questions.items() if isinstance(q, Box)}
+        boxes: dict[str, Question] = {qid: q for qid, q in req.questions.items() if isinstance(q, LOCATING)}
         if boxes:
             answers.update(self.inner.decide(replace(req, questions=boxes)).answers)
         return SystemOneResponse(model=str(self.model), answers=answers, usage={})

@@ -18,14 +18,15 @@ _LAZY: dict[str, str] = {
     "Choice": "s1ght.schema.questions",
     "Score": "s1ght.schema.questions",
     "Box": "s1ght.schema.questions",
+    "Boxes": "s1ght.schema.questions",
 }
 
-__all__ = ["S1GHT", "Box", "Choice", "Image", "Noul", "Score", "__version__"]
+__all__ = ["S1GHT", "Box", "Boxes", "Choice", "Image", "Noul", "Score", "__version__"]
 
 if TYPE_CHECKING:
     from s1ght.model import S1GHT
     from s1ght.schema.assets import Image
-    from s1ght.schema.questions import Box, Choice, Noul, Score
+    from s1ght.schema.questions import Box, Boxes, Choice, Noul, Score
 
 
 def __getattr__(name: str) -> Any:

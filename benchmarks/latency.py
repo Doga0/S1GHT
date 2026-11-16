@@ -1,7 +1,7 @@
 """Latency table for several models and runtimes, as Markdown (for docs/models.md and the design doc).
 
     python benchmarks/latency.py d1-omni-600m:ollama --sizes 128 256 384 640 --batches 1 4 16
-    python benchmarks/latency.py qwen3-vl-4b:vllm --out results/t4.json
+    python benchmarks/latency.py d1-2b:llama_server --out results/cpu.json
 
 Each target is `model[:runtime]`. One model is loaded at a time and closed before the next, so
 memory numbers are per model. See `s1ght.bench` for what is measured.

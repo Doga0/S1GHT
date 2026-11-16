@@ -5,7 +5,7 @@
   on-threshold before an event starts.
 - Choice: moving average of the probability vector; the pick is its argmax.
 - Score: moving average of the level probabilities; the score is their expected level.
-- Box: the latest answer.
+- Box, Boxes: the latest answer.
 
 The weight of a new answer is `1 - 0.5 ** (dt / half_life)`, kept within [0.05, 1], where
 `dt` is the time since that track's previous answer to the same question.
@@ -20,7 +20,7 @@ import numpy as np
 
 from s1ght.results import Event
 from s1ght.runtimes.base import confidence
-from s1ght.schema.systemone import Answer, BoxAnswer, ChoiceAnswer, NoulAnswer, ScoreAnswer
+from s1ght.schema.systemone import Answer, BoxAnswer, BoxesAnswer, ChoiceAnswer, NoulAnswer, ScoreAnswer
 
 _EPS = 1e-6
 MIN_WEIGHT = 0.05
@@ -97,7 +97,7 @@ class Fusion:
             value = ScoreAnswer(
                 float(np.dot(levels, p)), dict(answer.legend), dict(zip(levels, p.tolist())), confidence(p)
             )
-        elif isinstance(answer, BoxAnswer):
+        elif isinstance(answer, (BoxAnswer, BoxesAnswer)):
             value = answer
         else:
             raise TypeError(f"cannot fuse {type(answer).__name__}")

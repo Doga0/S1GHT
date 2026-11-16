@@ -7,14 +7,16 @@ import numpy as np
 import pytest
 from PIL import Image as PILImage
 
-from s1ght import Box, Choice, Image, Noul, Score
+from s1ght import Box, Boxes, Choice, Image, Noul, Score
 from s1ght.schema.questions import load_questions, question_from_wire
 from s1ght.schema.systemone import (
+    BoxesAnswer,
     ChoiceAnswer,
     NoulAnswer,
     ScoreAnswer,
     SystemOneRequest,
     SystemOneResponse,
+    answer_from_wire,
 )
 
 DATA = Path(__file__).parent / "data"
@@ -48,6 +50,9 @@ def test_choice_list_becomes_dict() -> None:
         lambda: Choice("pick", [f"o{i}" for i in range(256)]),
         lambda: Score("rate", ["low"]),
         lambda: Score("rate", [str(i) for i in range(11)]),
+        lambda: Boxes(""),
+        lambda: Boxes("every cat", max=0),
+        lambda: Boxes("every cat", max=True),
     ],
 )
 def test_question_validation(make) -> None:
@@ -68,6 +73,8 @@ def test_choice_limits_accepted() -> None:
         Choice("Weather?", {"sun": None, "rain": "Wet ground"}),
         Score("How cloudy?", ["Clear", "Some", "Overcast"]),
         Box("the umbrella in `photo`"),
+        Boxes("every cat in `photo`"),
+        Boxes("every cat in `photo`", max=4),
     ],
 )
 def test_question_wire_roundtrip(q) -> None:
@@ -239,9 +246,29 @@ def test_ollama_images_field_and_labels() -> None:
 
 
 def test_ollama_rejects_box() -> None:
-    req = SystemOneRequest("clef", Image(png_bytes()), {"where": Box("the cup")})
-    with pytest.raises(ValueError, match="Box"):
-        req.to_wire("ollama")
+    for q in (Box("the cup"), Boxes("every cup")):
+        req = SystemOneRequest("clef", Image(png_bytes()), {"where": q})
+        with pytest.raises(ValueError, match="Box"):
+            req.to_wire("ollama")
+        assert req.needs_images_flag
+
+
+def test_ollama_dialect_data_urls() -> None:
+    img = Image(png_bytes())
+    body, _ = SystemOneRequest("m", img, {"q": Noul("ok?")}).to_wire("ollama", data_urls=True)
+    assert body["images"][0].startswith("data:image/png;base64,")
+    assert Image(png_bytes(), format="jpg").mime == "image/jpeg"
+
+
+def test_box_answers_roundtrip() -> None:
+    wire = {"type": "box", "box": {"top": 0.1, "bottom": 0.2, "left": 0.3, "right": 0.4}, "confidence": 0.9}
+    assert answer_from_wire(wire).to_wire() == wire  # TypeSafe: no found or present
+    missing = {"type": "box", "box": None, "confidence": 0.0, "found": 0.0}
+    assert answer_from_wire(missing).to_wire() == missing
+    every = {"type": "boxes", "boxes": [{"box": wire["box"]}], "count": 3}  # the count can exceed the boxes read
+    a = answer_from_wire(every)
+    assert isinstance(a, BoxesAnswer) and a.count == 3 and a.to_wire() == every
+    assert answer_from_wire({"type": "boxes", "boxes": []}).count == 0
 
 
 # --- responses -------------------------------------------------------------------------------

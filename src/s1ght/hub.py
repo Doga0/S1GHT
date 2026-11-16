@@ -4,7 +4,8 @@
 
 1. A short name from the packaged catalog (`registry.yaml`), e.g. "d1-3b".
 2. A runtime URI: `ollama://<tag>`, `ollaya://<tag>`, `typesafe://<model>`,
-   `vllm://host:port/<model>`, `llama-server://host:port[/<model>]`.
+   `vllm://host:port/<model>`, `llama-server://host:port[/<model>]`,
+   `systemone://host:port[/<model>]` (any server speaking TypeSafe's `/v1/systemone`).
 
 Weights that S1GHT runs itself (in-process runtimes) are downloaded with `huggingface_hub`
 into `$S1GHT_CACHE` (default `~/.cache/s1ght`). Server runtimes download their own models
@@ -24,11 +25,11 @@ from typing import Any
 
 import yaml
 
-SERVER_RUNTIMES = ("ollama", "ollaya", "typesafe", "vllm", "llama_server")
+SERVER_RUNTIMES = ("ollama", "ollaya", "typesafe", "vllm", "llama_server", "systemone")
 LOCAL_RUNTIMES = ("llama_cpp",)
 """Runtimes that run the model in this process; they take `device=`."""
 RUNTIMES = (*LOCAL_RUNTIMES, *SERVER_RUNTIMES)
-FAMILIES = ("lfm2_vl", "d1_omni", "qwen_vl", "semif_generic")
+FAMILIES = ("lfm2_vl", "lfm3_vl", "d1_omni", "h2o_lightning", "qwen_vl", "semif_generic")
 """How a model is prompted and read: its own decision engine (d1) or option letters (chat VLMs)."""
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
@@ -155,7 +156,14 @@ def parse_uri(uri: str) -> RuntimeSpec:
         if not host:
             raise ValueError(f"expected llama-server://host:port[/model], got {uri!r}")
         return RuntimeSpec(runtime="llama_server", model=model or "default", base_url=f"http://{host}")
-    raise ValueError(f"unknown scheme {scheme!r} in {uri!r}; expected ollama, ollaya, typesafe, vllm or llama-server")
+    if scheme == "systemone":
+        host, _, model = rest.partition("/")
+        if not host:
+            raise ValueError(f"expected systemone://host:port[/model], got {uri!r}")
+        return RuntimeSpec(runtime="systemone", model=model or "default", base_url=f"http://{host}")
+    raise ValueError(
+        f"unknown scheme {scheme!r} in {uri!r}; expected ollama, ollaya, typesafe, vllm, llama-server or systemone"
+    )
 
 
 _HOW = "use a catalog name (`s1ght models`) or a runtime URI such as ollama://<tag> or llama-server://host:port"
@@ -196,8 +204,8 @@ def _from_entry(entry: ModelEntry, runtime: str | None) -> RuntimeSpec:
         return replace(
             spec, model=entry.source.repo, source=HFRef.parse(opts["gguf"]), family=entry.family, options=opts
         )
-    if runtime in ("vllm", "llama_server"):
-        return replace(spec, model=opts["model"], family=entry.family, base_url=opts.get("base_url"))
+    if runtime in ("vllm", "llama_server", "systemone"):
+        return replace(spec, model=opts["model"], family=entry.family, base_url=opts.get("base_url"), options=opts)
     return spec
 
 

@@ -10,10 +10,10 @@ import pytest
 from PIL import Image as PILImage
 from PIL import ImageDraw
 
-from s1ght import Box, Choice, Image, Noul, Score
+from s1ght import Box, Boxes, Choice, Image, Noul, Score
 from s1ght.runtimes.base import CapabilityError, Runtime, scores_to_answers
 from s1ght.runtimes.server.systemone import SystemOneClient, SystemOneError
-from s1ght.schema.systemone import ChoiceAnswer, NoulAnswer, SystemOneRequest
+from s1ght.schema.systemone import BoxAnswer, BoxesAnswer, ChoiceAnswer, NoulAnswer, SystemOneRequest
 
 ANSWERS = {
     "rain": {"type": "noul", "noul": 0.8},
@@ -179,6 +179,93 @@ def test_ollaya_uses_api_decide_and_png() -> None:
     sent = base64.b64decode(json.loads(req.read())["images"][0])
     assert sent.startswith(b"\x89PNG")
     assert resp.answers["rain"].noul == 0.8
+
+
+# --- llama-server and other /v1/systemone servers -------------------------------------------
+
+
+def test_llama_server_sends_data_urls_and_needs_no_model_key(monkeypatch) -> None:
+    monkeypatch.delenv("LLAMA_SERVER_URL", raising=False)
+    photo = Image(jpeg())
+    reply = httpx.Response(
+        200, json={"answers": {"rain": ANSWERS["rain"]}, "usage": {"input_tokens": 9, "output_tokens": 0}}
+    )
+    rec = Recorder(reply)
+    c = client("llama_server", rec, model="d1-2B")
+    resp = c.decide(SystemOneRequest("m", "Camera frame.", {"rain": QUESTIONS["rain"]}, [photo]))
+
+    req = rec.requests[0]
+    assert str(req.url) == "http://127.0.0.1:8080/v1/systemone"
+    body = json.loads(req.read())
+    assert body["images"] == ["data:image/jpeg;base64," + base64.b64encode(photo.to_bytes()).decode()]
+    assert resp.model == "" and resp.answers["rain"].noul == 0.8
+    with pytest.raises(CapabilityError, match="box"):
+        c.decide(SystemOneRequest("m", photo, {"u": Box("the umbrella")}))
+    with pytest.raises(CapabilityError, match="boxes"):
+        c.decide(SystemOneRequest("m", photo, {"u": Boxes("every umbrella")}))
+    assert len(rec.requests) == 1
+
+
+def test_systemone_server_answers_box_inline(monkeypatch) -> None:
+    """H2O-Lightning's shim: TypeSafe JSON with inline assets; box, confidence, present, found."""
+    monkeypatch.delenv("SYSTEMONE_URL", raising=False)
+    photo = Image(jpeg(), ref="photo")
+    h2o = {
+        "type": "box",
+        "box": {"left": 0.1, "top": 0.2, "right": 0.5, "bottom": 0.9},
+        "confidence": 0.83,
+        "present": 0.97,
+        "found": True,
+    }
+    rec = Recorder(httpx.Response(200, json={"model": "h2oai/h2o-lightning-4b", "answers": {"mug": h2o}}))
+    c = client("systemone", rec, model="h2oai/h2o-lightning-4b", box=True)
+    resp = c.decide(SystemOneRequest("m", {"photo": photo}, {"mug": Box("the coffee mug in `photo`")}))
+
+    req = rec.requests[0]
+    assert str(req.url) == "http://127.0.0.1:8741/v1/systemone"
+    assert req.headers["content-type"] == "application/json"
+    body = json.loads(req.read())
+    assert body["assets"]["photo"]["data_base64"] == base64.b64encode(photo.to_bytes()).decode()
+    assert body["questions"]["mug"] == {"type": "box", "instructions": "the coffee mug in `photo`"}
+    a = resp.answers["mug"]
+    assert isinstance(a, BoxAnswer)
+    assert a.box == {"left": 0.1, "top": 0.2, "right": 0.5, "bottom": 0.9}
+    assert (a.confidence, a.present, a.found) == (0.83, 0.97, 1.0)
+    with pytest.raises(CapabilityError, match="box"):
+        client("systemone", Recorder()).decide(SystemOneRequest("m", photo, {"u": Box("the umbrella")}))
+
+
+def test_systemone_server_answers_boxes() -> None:
+    """d1-2B's answer shape: every instance and a count; a missing box is None."""
+    every = {
+        "type": "boxes",
+        "boxes": [
+            {"top": 0.1, "bottom": 0.4, "left": 0.0, "right": 0.3},
+            {"box": {"top": 0.5, "bottom": 0.9, "left": 0.6, "right": 1.0}, "confidence": 0.7},
+        ],
+        "count": 2,
+    }
+    none = {"type": "box", "box": None, "found": 0.2, "confidence": 0.1}
+    rec = Recorder(httpx.Response(200, json={"model": "d1-2B", "answers": {"cats": every, "remote": none}}))
+    c = client("systemone", rec, box=True, boxes=True)
+    qs = {"cats": Boxes("Every cat.", max=4), "remote": Box("the remote control")}
+    resp = c.decide(SystemOneRequest("m", Image(jpeg()), qs))
+    assert json.loads(rec.requests[0].read())["questions"]["cats"] == {
+        "type": "boxes",
+        "instructions": "Every cat.",
+        "max": 4,
+    }
+    cats = resp.answers["cats"]
+    assert isinstance(cats, BoxesAnswer) and cats.count == 2
+    assert (
+        cats.boxes[0].box == {"top": 0.1, "bottom": 0.4, "left": 0.0, "right": 0.3} and cats.boxes[0].confidence is None
+    )
+    assert cats.boxes[1].confidence == 0.7
+    assert resp.answers["remote"].box is None and resp.answers["remote"].found == 0.2  # type: ignore[union-attr]
+    assert cats.to_wire()["boxes"][1] == {
+        "box": {"top": 0.5, "bottom": 0.9, "left": 0.6, "right": 1.0},
+        "confidence": 0.7,
+    }
 
 
 # --- errors, retries, raw --------------------------------------------------------------------

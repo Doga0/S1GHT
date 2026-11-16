@@ -96,7 +96,7 @@ Without `json=True`, `track` prints events as they start and end, then a summary
 
 ```bash
 s1ght decide model=d1-omni-600m runtime=ollama source=bus.jpg questions=examples/questions.yaml
-s1ght decide model=qwen3-vl-4b source=gate.jpg state="camera: gate 3, forklifts only" questions=examples/inspection.yaml
+s1ght decide model=d1-2b source=gate.jpg state="camera: gate 3, forklifts only" questions=examples/inspection.yaml
 s1ght predict model=d1-omni-600m source="photos/*.jpg" questions=examples/questions.yaml save=True
 s1ght track model=d1-omni-600m source=0 ask=examples/ask.yaml show=True budget=4
 s1ght track model=d1-omni-600m source=site.mp4 ask=examples/ask.yaml save=True json=True > events.jsonl
