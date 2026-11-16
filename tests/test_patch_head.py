@@ -117,6 +117,7 @@ def test_average_precision_by_area() -> None:
 
 
 def test_agnostic_and_rescore() -> None:
+    pytest.importorskip("torchvision")  # agnostic() uses torchvision NMS; the base CI job has no torch
     # the same object found as class 0 and class 1: one box after class-agnostic NMS
     dets = [(np.array([[10, 10, 50, 50], [11, 10, 50, 50]], np.float32), np.array([0.9, 0.7]), np.array([0, 1]))]
     merged = ph.agnostic(dets)
