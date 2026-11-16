@@ -1,6 +1,7 @@
 """E2 (decision-space detection): the whole pipeline on a frozen decision model, scored by mAP.
 
-    python benchmarks/dsod_pipeline.py --model qwen3-vl-4b --device cuda --out e2.json
+    python benchmarks/dsod_pipeline.py --model d1-3b --device cuda --out e2b.json
+    python benchmarks/dsod_pipeline.py --model none  # the oracle rows only, no model
     python benchmarks/dsod_pipeline.py --images 20 --cells mark --bits 2
 
 E0 (`decision_ceiling.py`) measured what the question designs reach with perfect answers; E1 and
@@ -35,6 +36,21 @@ Configurations (each stage answered by the model or by the truth, `oracle`) sepa
 A model's answers are cached by (image, question), so a question shared by configurations is
 asked once. Reported: mAP (COCO style, 12 classes, 0.50:0.95), mAP50, mAP75, by object size,
 model questions per image and ms per image (questions x the measured ms per question).
+
+E2b (E2 with Qwen3-VL-4B: 0.116 mAP, 0.504 with true edges, so the edges were the bottleneck):
+- **The model defaults to `d1-3b`,** a decision model; Qwen3-VL-4B is a general VLM, kept only as
+  a reference (`--model qwen3-vl-4b`).
+- **Edge regions (`--edges`):** `strip` as in E2 (the region beyond the line, to the image
+  border, framed in red), and `near`: only the cell-wide part next to the line, cropped and
+  enlarged, so a sliver of the object fills more of the image. Configurations whose edges the
+  model answers run once per region (`model [near]` ...).
+- **Edge diagnostics** for objects matched to a true shape: signed edge error (positive: the edge
+  lies inside the true box, i.e. the model missed slivers) per side, and P(yes) by where the
+  line lies relative to the true edge (in cells), next to the truth's yes rate.
+- **Crossing level:** the edge is read where the monotone answers cross a level. It is chosen
+  (0.05-0.95) on the first half of the images by edge error and tested on the second half. It is
+  a constant of the decoder, fitted on ground truth like a calibration temperature; the model
+  is not trained. Re-reading at another level asks nothing new.
 """
 
 from __future__ import annotations
@@ -44,12 +60,14 @@ import json
 import random
 import time
 from collections.abc import Callable, Hashable
+from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from decision_ceiling import cell_box, components, split_by_seeds
-from patch_head import AREAS, average_precision
+from patch_head import AREAS, average_precision, box_iou
 from PIL import Image as PILImage
 from PIL import ImageDraw
 from region_questions import COLORS, MARK, SHAPES, Scene, cell_edges, center_cell, coverage, crop, edge_estimate
@@ -69,6 +87,7 @@ CONFIGS: dict[str, tuple[dict[str, str], bool]] = {  # name -> (source per stage
     "oracle, no edges": ({s: "oracle" for s in STAGES}, False),
 }
 TAU = 0.5
+EDGE_METHODS = ("strip", "near")
 Cell = tuple[int, int]
 Rect = tuple[int, int, int, int]
 
@@ -84,6 +103,15 @@ def framed(image: PILImage.Image, rect: Rect) -> PILImage.Image:
     x0, y0, x1, y1 = rect
     ImageDraw.Draw(out).rectangle((x0, y0, x1 - 1, y1 - 1), outline=MARK, width=3)
     return out
+
+
+def zoom(image: PILImage.Image, rect: Rect, side: int) -> PILImage.Image:
+    """The region cropped and enlarged: the shorter side to `side` px, the longer at most 2x that."""
+    x0, y0, x1, y1 = rect
+    w, h = max(x1 - x0, 1), max(y1 - y0, 1)
+    scale = min(side / min(w, h), 2 * side / max(w, h))
+    size = (max(round(w * scale), 1), max(round(h * scale), 1))
+    return image.crop((x0, y0, x0 + w, y0 + h)).resize(size, PILImage.Resampling.BICUBIC)
 
 
 def cell_rect(scene: Scene, cell: Cell, g: int) -> Rect:
@@ -118,7 +146,7 @@ class Oracle:
             out[c] = {cell: float(cell == at) for cell in cells}
         return out
 
-    def strips(self, asks: list[tuple[str, Rect]]) -> np.ndarray:
+    def strips(self, asks: list[tuple[str, Rect]], method: str = "strip") -> np.ndarray:
         out = np.zeros(len(asks))
         for i, (c, (x0, y0, x1, y1)) in enumerate(asks):
             if c in self.masks:
@@ -221,15 +249,26 @@ class ModelAnswers:
             out[cls][cell] = float(v)
         return out
 
-    def strips(self, asks: list[tuple[str, Rect]]) -> np.ndarray:
-        items = [
-            (
-                ("strip", self.index, rect),
-                lambda rect=rect: {"photo": framed(self.scene.image, rect)},
-                f"Does any part of the {cls} lie inside the red rectangle in `photo`?",
-            )
-            for cls, rect in asks
-        ]
+    def strips(self, asks: list[tuple[str, Rect]], method: str = "strip") -> np.ndarray:
+        """`strip`: the region framed in red on the image; `near`: the region cropped and enlarged."""
+        if method == "strip":
+            items = [
+                (
+                    ("strip", self.index, rect),
+                    lambda rect=rect: {"photo": framed(self.scene.image, rect)},
+                    f"Does any part of the {cls} lie inside the red rectangle in `photo`?",
+                )
+                for cls, rect in asks
+            ]
+        else:
+            items = [
+                (
+                    ("near", self.index, rect),
+                    lambda rect=rect: {"photo": zoom(self.scene.image, rect, self.crop_side)},
+                    f"Does any part of the {cls} lie in `photo`?",
+                )
+                for cls, rect in asks
+            ]
         return self._ask(items) if items else np.zeros(0)
 
 
@@ -291,62 +330,171 @@ def strip(box: np.ndarray, side: int, at: float, width: int, height: int) -> Rec
     return x0, a, x1, height
 
 
-def refine(
-    box: np.ndarray, answers: np.ndarray, lines: list[np.ndarray], spans: list[tuple[float, float]]
-) -> np.ndarray:
-    """Edges read from strip answers: P(part of the object inside the strip) per line, per side.
+def edge_region(method: str, box: np.ndarray, side: int, at: float, width: int, height: int, cell: float) -> Rect:
+    """The region an edge question asks about: `strip` reaches the image border, `near` only one
+    cell past the line (where a sliver of the object would be)."""
+    x0, y0, x1, y1 = strip(box, side, at, width, height)
+    if method == "strip":
+        return x0, y0, x1, y1
+    d = round(cell)
+    if side == 0:
+        return max(x1 - d, 0), y0, x1, y1
+    if side == 2:
+        return x0, y0, min(x0 + d, width), y1
+    if side == 1:
+        return x0, max(y1 - d, 0), x1, y1
+    return x0, y0, x1, min(y0 + d, height)
+
+
+@dataclass
+class Found:
+    """A decoded object before its edges are read: the cells' box, its edge questions and answers."""
+
+    cls: str
+    box: np.ndarray
+    score: float
+    spans: list[tuple[float, float]] = field(default_factory=list)
+    lines: list[np.ndarray] = field(default_factory=list)
+    rects: list[list[Rect]] = field(default_factory=list)
+    answers: np.ndarray | None = None  # (4, lines): P(part of the object in the region)
+
+
+def refine(found: Found, level: float = 0.5) -> np.ndarray:
+    """Edges read from the region answers, crossing `level`.
 
     Left/top: a yes means the edge is before the line. Right/bottom: after it. The span's ends
     act as sure answers (the edge is inside the span), then E1's monotone readout.
     """
-    out = box.astype(float).copy()
+    box = found.box.astype(float)
+    if found.answers is None:
+        return box
+    out = box.copy()
     for side in range(4):
-        lo, hi = spans[side]
+        lo, hi = found.spans[side]
         beyond = side < 2  # truth "edge past the line" in the side's inward direction
-        p_truth = 1.0 - answers[side]
-        at = np.concatenate([[lo], lines[side], [hi]])
+        p_truth = 1.0 - found.answers[side]
+        at = np.concatenate([[lo], found.lines[side], [hi]])
         p = np.concatenate([[1.0 if beyond else 0.0], p_truth, [0.0 if beyond else 1.0]])
-        out[side] = edge_estimate(at, p, beyond)
+        out[side] = edge_estimate(at, p, beyond, level)
     if out[2] <= out[0] or out[3] <= out[1]:
-        return box.astype(float)
+        return box
     return out
 
 
-def detect(
-    scene: Scene, src: dict[str, Any], g: int, bits: int, edges: bool
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Boxes, scores and class indices for one scene; `src` maps each stage to its answerer."""
+def decode(scene: Scene, src: dict[str, Any], g: int, bits: int, edges: str | None) -> list[Found]:
+    """Objects of one scene, with their edge answers when `edges` names a region method."""
     w, h = scene.image.size
     xs, ys = cell_edges(w, g), cell_edges(h, g)
     pres = src["presence"].presence(CLASSES)
     present = [c for c, p in zip(CLASSES, pres, strict=True) if p > TAU]
     occ = src["cells"].cells(present) if present else {}
     cen = src["centers"].centers({c: [tuple(map(int, rc)) for rc in np.argwhere(occ[c] > TAU)] for c in present})
-    found = []  # (class, box, score)
+    found = []
     for c in present:
         for part in objects(occ[c], cen[c], xs, ys):
             score = pres[CLASSES.index(c)] * float(np.mean([occ[c][cell] for cell in part]))
-            found.append((c, cell_box(part, xs, ys), score))
+            found.append(Found(c, cell_box(part, xs, ys), score))
     if edges and found:
-        asks, layout = [], []
-        for c, box, _ in found:
-            spans, lines = [], []
+        asks = []
+        for f in found:
             for side in range(4):
-                lo, hi, ln = edge_lines(box, side, xs, ys, bits)
-                spans.append((lo, hi))
-                lines.append(ln)
-                asks += [(c, strip(box, side, a, w, h)) for a in ln]
-            layout.append((spans, lines))
-        p = src["edges"].strips(asks).reshape(len(found), 4, -1)
-        found = [
-            (c, refine(box, p[i], lines=layout[i][1], spans=layout[i][0]), s) for i, (c, box, s) in enumerate(found)
-        ]
-    boxes = np.array([b for _, b, _ in found], np.float32).reshape(-1, 4)
-    return (
-        boxes,
-        np.array([s for *_, s in found], np.float32),
-        np.array([CLASSES.index(c) for c, *_ in found], np.int64),
-    )
+                lo, hi, ln = edge_lines(f.box, side, xs, ys, bits)
+                cell = (w if side % 2 == 0 else h) / g
+                f.spans.append((lo, hi))
+                f.lines.append(ln)
+                f.rects.append([edge_region(edges, f.box, side, a, w, h, cell) for a in ln])
+                asks += [(f.cls, r) for r in f.rects[-1]]
+        p = src["edges"].strips(asks, edges).reshape(len(found), 4, -1)
+        for f, a in zip(found, p, strict=True):
+            f.answers = a
+    return found
+
+
+def finish(found: list[Found], level: float = 0.5) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Boxes, scores and class indices."""
+    boxes = np.array([refine(f, level) for f in found], np.float32).reshape(-1, 4)
+    scores = np.array([f.score for f in found], np.float32)
+    return boxes, scores, np.array([CLASSES.index(f.cls) for f in found], np.int64)
+
+
+def detect(
+    scene: Scene, src: dict[str, Any], g: int, bits: int, edges: bool
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """E2's entry point: decode, then read `strip` edges at 0.5."""
+    return finish(decode(scene, src, g, bits, "strip" if edges else None))
+
+
+# --- edge diagnostics -------------------------------------------------------------------------
+
+BINS = np.arange(-2.0, 2.01, 0.25)  # line position past the true edge, inward, in cells
+
+
+def matched(found: list[Found], scene: Scene) -> list[tuple[Found, np.ndarray]]:
+    """Each true shape's decoded object of its class with the highest cell-box IoU (> 0.1)."""
+    out = []
+    for s in scene.shapes:
+        cands = [f for f in found if f.cls == s.name and f.answers is not None]
+        if cands:
+            ious = box_iou(np.array([f.box for f in cands], float), s.box[None].astype(float))[:, 0]
+            if ious.max() > 0.1:
+                out.append((cands[int(ious.argmax())], s.box))
+    return out
+
+
+def inward(box: np.ndarray, truth: np.ndarray) -> np.ndarray:
+    """Signed edge errors, positive when an edge lies inside the true box (the box is too small)."""
+    return np.array([box[0] - truth[0], box[1] - truth[1], truth[2] - box[2], truth[3] - box[3]], float)
+
+
+def edge_stats(found: list[list[Found]], scenes: list[Scene], g: int, level: float = 0.5) -> dict[str, Any]:
+    """Signed and absolute edge errors (px) of matched objects, and P(yes) by the line's position
+    relative to the true edge (inward, in cells), with the truth's yes rate."""
+    errors, dist, p_yes, truth_yes = [], [], [], []
+    for fs, sc in zip(found, scenes, strict=True):
+        w, h = sc.image.size
+        mask = {s.name: s.mask for s in sc.shapes}
+        for f, tb in matched(fs, sc):
+            assert f.answers is not None
+            errors.append(inward(refine(f, level), tb))
+            for side in range(4):
+                cell = (w if side % 2 == 0 else h) / g
+                sign = 1.0 if side < 2 else -1.0
+                for line, rect, p in zip(f.lines[side], f.rects[side], f.answers[side], strict=True):
+                    dist.append(sign * (line - tb[side]) / cell)
+                    p_yes.append(p)
+                    x0, y0, x1, y1 = rect
+                    truth_yes.append(float(mask[f.cls][y0:y1, x0:x1].any()))
+    if not errors:
+        return {"objects": 0}
+    e = np.array(errors)
+    d, py, ty = np.array(dist), np.array(p_yes), np.array(truth_yes)
+    curve = []
+    for lo, hi in pairwise(BINS):
+        m = (d >= lo) & (d < hi)
+        if m.any():
+            curve.append(
+                {
+                    "from": float(lo),
+                    "to": float(hi),
+                    "n": int(m.sum()),
+                    "p_yes": float(py[m].mean()),
+                    "truth": float(ty[m].mean()),
+                }
+            )
+    return {
+        "objects": len(e),
+        "signed_px": float(e.mean()),
+        "abs_px": float(np.abs(e).mean()),
+        "signed_px_by_side": e.mean(0).tolist(),
+        "curve": curve,
+    }
+
+
+def calibrate(found: list[list[Found]], scenes: list[Scene], g: int) -> float:
+    """The crossing level with the smallest mean absolute edge error on these scenes."""
+    levels = np.round(np.arange(0.05, 0.96, 0.05), 2)
+    errs = [edge_stats(found, scenes, g, float(lv)).get("abs_px", np.inf) for lv in levels]
+    return float(levels[int(np.argmin(errs))])
 
 
 # --- experiment -------------------------------------------------------------------------------
@@ -371,28 +519,45 @@ def run(scenes: list[Scene], args: argparse.Namespace, model: Any | None) -> dic
         )
         for sc in scenes
     ]
+    half = len(scenes) // 2  # calibration: the first half; test: the second
     asker = Asker(model, args.batch) if model is not None else None
     report: dict[str, Any] = {"configs": {}}
     for name in args.configs:
         sources, edges = CONFIGS[name]
         if asker is None and "model" in sources.values():
             continue
-        dets, questions = [], 0
-        t0 = time.perf_counter()
-        for i, sc in enumerate(scenes):
-            oracle = Oracle(sc, args.grid)
-            answers = ModelAnswers(asker, sc, i, args.grid, args.cells, args.centers, args.crop_side) if asker else None
-            src = {stage: answers if sources[stage] == "model" else oracle for stage in STAGES}
-            if not edges:
-                src["edges"] = oracle  # unused
-            dets.append(detect(sc, src, args.grid, args.bits, edges))
-            questions += answers.count if answers is not None else 0
-        row = summary(dets, truth)
-        row["questions"] = questions / len(scenes)
-        row["objects"] = float(np.mean([len(d[0]) for d in dets]))
-        row["seconds"] = time.perf_counter() - t0
-        report["configs"][name] = row
-        print(f"{name}: {json.dumps(row['all'])}, {row['questions']:.0f} model questions/image", flush=True)
+        model_edges = edges and sources["edges"] == "model"
+        methods: list[str | None] = list(args.edges) if model_edges else (["strip"] if edges else [None])
+        for method in methods:
+            label = f"{name} [{method}]" if model_edges else name
+            found, questions = [], 0
+            t0 = time.perf_counter()
+            for i, sc in enumerate(scenes):
+                oracle = Oracle(sc, args.grid)
+                answers = (
+                    ModelAnswers(asker, sc, i, args.grid, args.cells, args.centers, args.crop_side) if asker else None
+                )
+                src = {stage: answers if sources[stage] == "model" else oracle for stage in STAGES}
+                found.append(decode(sc, src, args.grid, args.bits, method))
+                questions += answers.count if answers is not None else 0
+            row = summary([finish(f) for f in found], truth)
+            row["questions"] = questions / len(scenes)
+            row["objects"] = float(np.mean([len(f) for f in found]))
+            row["seconds"] = time.perf_counter() - t0
+            if edges:
+                row["edges"] = edge_stats(found, scenes, args.grid)
+            if model_edges and half:
+                level = calibrate(found[:half], scenes[:half], args.grid)
+                test = found[half:]
+                row["calibrated"] = {
+                    "level": level,
+                    "test_map_at_0.5": summary([finish(f) for f in test], truth[half:])["all"],
+                    "test_map_calibrated": summary([finish(f, level) for f in test], truth[half:])["all"],
+                    "test_edges_at_0.5": edge_stats(test, scenes[half:], args.grid),
+                    "test_edges_calibrated": edge_stats(test, scenes[half:], args.grid, level),
+                }
+            report["configs"][label] = row
+            print(f"{label}: {json.dumps(row['all'])}, {row['questions']:.0f} model questions/image", flush=True)
     if asker is not None and asker.asked:
         report["ms_per_question"] = asker.seconds * 1000 / asker.asked
     return report
@@ -401,9 +566,9 @@ def run(scenes: list[Scene], args: argparse.Namespace, model: Any | None) -> dic
 def markdown(report: dict[str, Any]) -> str:
     ms = report.get("ms_per_question")
     lines = [
-        f"E2 decision-space detection: {report['images']} synthetic images, {report['grid']}x{report['grid']} grid, "
-        f"cells by {report['cells']}, centers by {report['centers']}, {2 ** report['bits'] - 1} lines per edge"
-        + (f", {ms:.0f} ms per model question" if ms else ""),
+        f"E2 decision-space detection with {report['model']}: {report['images']} synthetic images, "
+        f"{report['grid']}x{report['grid']} grid, cells by {report['cells']}, centers by {report['centers']}, "
+        f"{2 ** report['bits'] - 1} lines per edge" + (f", {ms:.0f} ms per model question" if ms else ""),
         "",
         (
             "| configuration | model questions/image | ms/image | objects/image | mAP | mAP50 | mAP75 "
@@ -418,19 +583,70 @@ def markdown(report: dict[str, Any]) -> str:
             f"| {name} | {r['questions']:.0f} | {cost} | {r['objects']:.1f} | {a['map']:.3f} | {a['map50']:.3f} "
             f"| {a['map75']:.3f} | {r['small']['map']:.3f} | {r['medium']['map']:.3f} | {r['large']['map']:.3f} |"
         )
+    edged = {n: r for n, r in report["configs"].items() if r.get("edges", {}).get("objects")}
+    if edged:
+        lines += [
+            "",
+            "Edges of matched objects (px; signed > 0: the edge lies inside the true box)",
+            "",
+            "| configuration | objects | signed | abs | signed left / top / right / bottom |",
+            "| --- | ---: | ---: | ---: | --- |",
+        ]
+        for n, r in edged.items():
+            e = r["edges"]
+            by = " / ".join(f"{v:.1f}" for v in e["signed_px_by_side"])
+            lines.append(f"| {n} | {e['objects']} | {e['signed_px']:.1f} | {e['abs_px']:.1f} | {by} |")
+    cal = {n: r["calibrated"] for n, r in report["configs"].items() if "calibrated" in r}
+    if cal:
+        lines += [
+            "",
+            "Crossing level calibrated on the first half of the images, tested on the second half",
+            "",
+            (
+                "| configuration | level | test mAP at 0.5 | calibrated | test mAP75 at 0.5 | calibrated "
+                "| abs edge error px at 0.5 | calibrated |"
+            ),
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for n, c in cal.items():
+            a, b = c["test_map_at_0.5"], c["test_map_calibrated"]
+            ea = c["test_edges_at_0.5"].get("abs_px", float("nan"))
+            eb = c["test_edges_calibrated"].get("abs_px", float("nan"))
+            lines.append(
+                f"| {n} | {c['level']:.2f} | {a['map']:.3f} | {b['map']:.3f} | {a['map75']:.3f} | {b['map75']:.3f} "
+                f"| {ea:.1f} | {eb:.1f} |"
+            )
+    curves = {n: r["edges"]["curve"] for n, r in edged.items() if "[" in n}
+    if curves:
+        names = list(curves)
+        lines += [
+            "",
+            "P(yes) by the line's position past the true edge (inward, in cells; the truth says yes for > 0)",
+            "",
+            "| line position | truth yes | " + " | ".join(names) + " |",
+            "| --- | ---: |" + " ---: |" * len(names),
+        ]
+        rows: dict[tuple[float, float], dict[str, float]] = {}
+        for n, curve in curves.items():
+            for b in curve:
+                rows.setdefault((b["from"], b["to"]), {"truth": b["truth"]})[n] = b["p_yes"]
+        for (lo, hi), v in sorted(rows.items()):
+            vals = " | ".join(f"{v[n]:.2f}" if n in v else "-" for n in names)
+            lines.append(f"| {lo:+.2f} to {hi:+.2f} | {v['truth']:.2f} | {vals} |")
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None, model: Any | None = None) -> dict[str, Any]:
     """`model` (a loaded S1GHT) replaces `--model`, for tests; `--model none` runs the oracle rows only."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--model", default="qwen3-vl-4b", help="catalog name, or none for the oracle rows only")
+    ap.add_argument("--model", default="d1-3b", help="catalog name, or none for the oracle rows only")
     ap.add_argument("--images", type=int, default=100)
     ap.add_argument("--size", type=int, default=448)
     ap.add_argument("--grid", type=int, default=8)
-    ap.add_argument("--bits", type=int, default=3, help="2^bits - 1 strip questions per edge")
+    ap.add_argument("--bits", type=int, default=3, help="2^bits - 1 edge questions per side")
     ap.add_argument("--cells", choices=["crop", "mark"], default="crop")
     ap.add_argument("--centers", choices=["crop", "mark"], default="mark")
+    ap.add_argument("--edges", nargs="+", choices=EDGE_METHODS, default=list(EDGE_METHODS), help="edge regions")
     ap.add_argument("--configs", nargs="+", choices=list(CONFIGS), default=list(CONFIGS))
     ap.add_argument("--crop-side", type=int, default=224)
     ap.add_argument("--batch", type=int, default=16, help="requests per runtime call, questions per request")
@@ -441,6 +657,7 @@ def main(argv: list[str] | None = None, model: Any | None = None) -> dict[str, A
 
     scenes = make_scenes(args.images, args.size, args.seed)
     report: dict[str, Any] = {k: getattr(args, k) for k in ("images", "grid", "bits", "cells", "centers")}
+    report["model"] = getattr(model, "name", None) or args.model
     if model is not None or args.model == "none":
         report.update(run(scenes, args, model))
     else:
